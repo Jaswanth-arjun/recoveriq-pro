@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import API from "../../lib/api";
+import { api } from "../../lib/api";
 
 export default function PromisesPage() {
   const [promises, setPromises] = useState([]);
@@ -22,8 +22,8 @@ export default function PromisesPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const res = await API.get(`/promise-to-pay?status=${selectedStatus}`);
-      setPromises(res.data);
+      const data = await api(`/promise-to-pay?status=${selectedStatus}`);
+      setPromises(data || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -50,23 +50,29 @@ export default function PromisesPage() {
     }
 
     try {
-      await API.post("/promise-to-pay", {
-        ...form,
-        promised_amount: parseFloat(form.promised_amount),
+      await api("/promise-to-pay", {
+        method: "POST",
+        body: JSON.stringify({
+          ...form,
+          promised_amount: parseFloat(form.promised_amount),
+        }),
       });
       setShowModal(false);
       loadData();
     } catch (err) {
-      setErrorMsg(err.response?.data?.detail || "Failed to create payment promise.");
+      setErrorMsg(err.message || "Failed to create payment promise.");
     }
   };
 
   const handleStatusUpdate = async (id, status) => {
     try {
-      await API.patch(`/promise-to-pay/${id}`, { status });
+      await api(`/promise-to-pay/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      });
       loadData();
     } catch (err) {
-      alert("Failed to update promise status");
+      alert(err.message || "Failed to update promise status");
     }
   };
 

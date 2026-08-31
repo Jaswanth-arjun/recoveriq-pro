@@ -972,7 +972,33 @@ class CreateB2BInvoiceRequest(BaseModel):
     phone: str
     invoice_number: str
     amount: float
-    due_date: str  # YYYY-MM-DD
+    due_date: str  # YYYY-MM-DD or DD-MM-YYYY or ISO format
+
+
+def parse_date_string(date_str: str) -> datetime:
+    if not date_str:
+        raise HTTPException(400, "Date string is required.")
+    date_str = str(date_str).strip()
+    formats = [
+        "%Y-%m-%d",
+        "%d-%m-%Y",
+        "%Y/%m/%d",
+        "%d/%m/%Y",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%fZ",
+        "%Y-%m-%dT%H:%M:%SZ",
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            pass
+    try:
+        from dateutil.parser import parse
+        return parse(date_str)
+    except Exception:
+        pass
+    raise HTTPException(400, f"Invalid date format: '{date_str}'. Expected YYYY-MM-DD or DD-MM-YYYY.")
 
 
 @router.get("/receivables/aging")
@@ -1079,7 +1105,7 @@ async def create_b2b_invoice(req: CreateB2BInvoiceRequest, db: AsyncSession = De
         db.add(cust)
         await db.flush()
 
-    due_dt = datetime.strptime(req.due_date, "%Y-%m-%d")
+    due_dt = parse_date_string(req.due_date)
     inv = B2BInvoice(
         merchant_id=merchant.id,
         customer_id=cust.id,
@@ -1139,10 +1165,7 @@ class CreatePromiseRequest(BaseModel):
 async def create_promise_to_pay(req: CreatePromiseRequest, db: AsyncSession = Depends(get_db)):
     merchant = await ensure_merchant(db)
     
-    try:
-        p_date = datetime.strptime(req.promised_date, "%Y-%m-%d")
-    except ValueError:
-        raise HTTPException(400, "Invalid date format. Expected YYYY-MM-DD")
+    p_date = parse_date_string(req.promised_date)
     
     if p_date.date() <= datetime.utcnow().date():
         raise HTTPException(400, "Promised payment date must be in the future.")

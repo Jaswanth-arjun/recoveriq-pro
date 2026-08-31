@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import API from "../../lib/api";
+import { api } from "../../lib/api";
 
 export default function ReceivablesPage() {
   const [aging, setAging] = useState(null);
@@ -25,11 +25,11 @@ export default function ReceivablesPage() {
     try {
       setLoading(true);
       const [agingRes, invoicesRes] = await Promise.all([
-        API.get("/receivables/aging"),
-        API.get(`/receivables/invoices?bucket=${selectedBucket}`),
+        api("/receivables/aging"),
+        api(`/receivables/invoices?bucket=${selectedBucket}`),
       ]);
-      setAging(agingRes.data);
-      setInvoices(invoicesRes.data);
+      setAging(agingRes);
+      setInvoices(invoicesRes);
     } catch (err) {
       console.error(err);
     } finally {
@@ -44,11 +44,11 @@ export default function ReceivablesPage() {
   const handleRemind = async (invId) => {
     try {
       setRemindingId(invId);
-      const res = await API.post(`/receivables/invoices/${invId}/remind`);
-      alert(`Payment Reminder & Razorpay Link Sent! Short URL: ${res.data.payment_link || "Created"}`);
+      const res = await api(`/receivables/invoices/${invId}/remind`, { method: "POST" });
+      alert(`Payment Reminder & Razorpay Link Sent! Short URL: ${res.payment_link || "Created"}`);
       loadData();
     } catch (err) {
-      alert("Failed to send reminder");
+      alert(err.message || "Failed to send reminder");
     } finally {
       setRemindingId(null);
     }
@@ -57,14 +57,17 @@ export default function ReceivablesPage() {
   const handleCreateInvoice = async (e) => {
     e.preventDefault();
     try {
-      await API.post("/receivables/invoices", {
-        ...form,
-        amount: parseFloat(form.amount),
+      await api("/receivables/invoices", {
+        method: "POST",
+        body: JSON.stringify({
+          ...form,
+          amount: parseFloat(form.amount),
+        }),
       });
       setShowModal(false);
       loadData();
     } catch (err) {
-      alert(err.response?.data?.detail || "Failed to create invoice");
+      alert(err.message || "Failed to create invoice");
     }
   };
 

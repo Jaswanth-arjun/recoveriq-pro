@@ -256,10 +256,8 @@ async def execute(db: AsyncSession, event: FailureEvent, decision: Decision) -> 
                 msg = await llm_service.compose_recovery_message(
                     customer.name, amount_inr, category, customer.language, short_url)
 
-                # Email via Resend
-                email_result = await messaging.send_recovery_email(
-                    customer.name, customer.email, amount_inr, short_url, category)
-                action_record.detail["email"] = email_result
+                # Email is sent directly by Razorpay (notify: {email: true})
+                action_record.detail["email"] = {"status": "handled_by_razorpay", "to": customer.email}
 
                 # Phone Call via Twilio
                 if customer.phone and settings.twilio_ready:
@@ -284,11 +282,9 @@ async def execute(db: AsyncSession, event: FailureEvent, decision: Decision) -> 
             short_url = link.get("short_url", "")
             action_record.detail = {"short_url": short_url, "promise_to_pay_tracker": True}
 
-            # Email reminder via Resend
+            # Email reminder is sent directly by Razorpay (notify: {email: true})
             if customer and customer.email:
-                email_result = await messaging.send_recovery_email(
-                    customer.name, customer.email, amount_inr, short_url, "invoice")
-                action_record.detail["email"] = email_result
+                action_record.detail["email"] = {"status": "handled_by_razorpay", "to": customer.email}
 
         elif decision.action == "VOICE_RECOVERY":
             script = await llm_service.compose_recovery_message(

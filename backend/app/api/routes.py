@@ -1103,7 +1103,12 @@ async def create_b2b_invoice(req: CreateB2BInvoiceRequest, db: AsyncSession = De
     if not cust:
         cust = Customer(merchant_id=merchant.id, name=req.name, email=req.email, phone=req.phone)
         db.add(cust)
-        await db.flush()
+    else:
+        if req.name:
+            cust.name = req.name
+        if req.email:
+            cust.email = req.email
+    await db.flush()
 
     due_dt = parse_date_string(req.due_date)
     inv = B2BInvoice(
@@ -1175,7 +1180,12 @@ async def create_promise_to_pay(req: CreatePromiseRequest, db: AsyncSession = De
     if not cust:
         cust = Customer(merchant_id=merchant.id, name=req.customer_name, email=req.customer_email, phone=req.customer_phone)
         db.add(cust)
-        await db.flush()
+    else:
+        if req.customer_name:
+            cust.name = req.customer_name
+        if req.customer_email:
+            cust.email = req.customer_email
+    await db.flush()
 
     promise = PromiseToPay(
         merchant_id=merchant.id,

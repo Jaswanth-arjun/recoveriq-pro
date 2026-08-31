@@ -247,12 +247,98 @@ async def detect_payment_degradation_task(db) -> dict | None:
     return None
 
 
+async def process_b2b_receivables_worker_task(db) -> list:
+    """Calculates AR aging, checks payments, and triggers multi-channel recovery actions."""
+    from app.models import B2BInvoice, Customer, PromiseToPay
+    from app.services import razorpay as rzp
+    from app.services.events import broadcast
+
+    now = datetime.utcnow()
+    res = await db.execute(select(B2BInvoice).where(B2BInvoice.status != "PAID"))
+    invoices = res.scalars().all()
+    processed = []
+
+    for inv in invoices:
+        cust = await db.get(Customer, inv.customer_id)
+        if not cust:
+            continue
+
+        days_overdue = (now - inv.due_date).days if now > inv.due_date else 0
+        days_to_due = (inv.due_date - now).days if inv.due_date > now else 0
+
+        # Automatic Payment Check
+        if inv.status == "PAID":
+            continue
+
+        if days_overdue > 0 and inv.status == "UNPAID":
+            inv.status = "OVERDUE"
+
+        # Escalation Tiers
+        new_escalation = 0
+        if days_overdue > 90:
+            new_escalation = 4  # 90+ Human Review
+        elif days_overdue > 60:
+            new_escalation = 3  # 61-90 High Priority Escalation
+        elif days_overdue > 30:
+            new_escalation = 2  # 31-60 Finance/Account Manager Escalation
+        elif days_overdue > 0:
+            new_escalation = 1  # 0-30 Follow-up & Reminders
+
+        if new_escalation > inv.escalation_level:
+            inv.escalation_level = new_escalation
+
+        # Policy-driven recovery action dispatch
+        action_taken = None
+        if days_to_due <= 3 and days_to_due >= 0 and inv.reminder_count == 0:
+            inv.reminder_count += 1
+            inv.last_reminder_at = now
+            action_taken = "PRE_DUE_REMINDER_SENT"
+        elif days_overdue == 1 and inv.reminder_count <= 1:
+            inv.reminder_count += 1
+            inv.last_reminder_at = now
+            action_taken = "OVERDUE_EMAIL_SENT"
+        elif days_overdue == 2 and inv.reminder_count <= 2:
+            inv.reminder_count += 1
+            inv.last_reminder_at = now
+            action_taken = "OVERDUE_SMS_WA_SENT"
+        elif days_overdue >= 7 and inv.reminder_count <= 3:
+            inv.reminder_count += 1
+            inv.last_reminder_at = now
+            action_taken = "P2P_CONFIRMATION_REQUESTED"
+        elif days_overdue >= 8 and inv.reminder_count <= 4:
+            inv.reminder_count += 1
+            inv.last_reminder_at = now
+            action_taken = "VOICE_FOLLOWUP_INITIATED"
+
+        if action_taken:
+            await audit(db, None, "executor", action_taken, {
+                "invoice_id": inv.id,
+                "invoice_number": inv.invoice_number,
+                "customer_name": cust.name,
+                "days_overdue": days_overdue,
+                "reminder_count": inv.reminder_count
+            })
+
+        processed.append({
+            "id": inv.id,
+            "invoice_number": inv.invoice_number,
+            "days_overdue": days_overdue,
+            "status": inv.status,
+            "escalation_level": inv.escalation_level,
+            "action_taken": action_taken
+        })
+
+    await db.commit()
+    return processed
+
+
 async def run_all_background_tasks():
     """Runs all background closed-loop tasks synchronously within a DB session."""
     async with SessionLocal() as db:
         try:
             await check_broken_promises_task(db)
             await process_b2b_aging_task(db)
+            await process_b2b_receivables_worker_task(db)
             await detect_payment_degradation_task(db)
         except Exception as e:
             print(f"[BACKGROUND TASK ERROR] {e}")

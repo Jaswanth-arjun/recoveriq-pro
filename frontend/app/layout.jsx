@@ -30,8 +30,8 @@ export default function RootLayout({ children }) {
 
   if (isStoreRoute) {
     return (
-      <html lang="en" className="dark">
-        <body className="bg-[#0e0b08] text-slate-200 min-h-screen antialiased">
+      <html lang="en" className="dark" suppressHydrationWarning>
+        <body className="bg-[#0e0b08] text-slate-200 min-h-screen antialiased" suppressHydrationWarning>
           {children}
         </body>
       </html>
@@ -39,8 +39,8 @@ export default function RootLayout({ children }) {
   }
 
   return (
-    <html lang="en" className="dark">
-      <body className="bg-[#0a0e17] text-slate-200 min-h-screen antialiased">
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <body className="bg-[#0a0e17] text-slate-200 min-h-screen antialiased" suppressHydrationWarning>
         <div className="flex min-h-screen">
           <aside
             className={`${

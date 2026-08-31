@@ -1,6 +1,9 @@
 from contextlib import asynccontextmanager
 
-import sentry_sdk
+try:
+    import sentry_sdk
+except ImportError:
+    sentry_sdk = None
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -40,7 +43,7 @@ async def lifespan(app: FastAPI):
     task.cancel()
 
 
-if settings.sentry_dsn:
+if settings.sentry_dsn and sentry_sdk:
     sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.2)
 
 app = FastAPI(
@@ -50,9 +53,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+if "*" not in origins:
+    origins.extend(["http://localhost:3001", "http://localhost:3000", "http://127.0.0.1:3000", "http://127.0.0.1:3001", "*"])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in settings.cors_origins.split(",")],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

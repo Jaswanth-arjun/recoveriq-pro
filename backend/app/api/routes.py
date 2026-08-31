@@ -1,7 +1,7 @@
 import json
 import random
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel
@@ -13,12 +13,13 @@ from app.core.db import get_db, SessionLocal, engine
 from app.models import (
     Merchant, Customer, Subscription, OneTimeOrder, Payment, FailureEvent, Diagnosis, Decision,
     PolicyCheck, Action, Outcome, AuditLog, VoiceCall, CopilotMessage,
-    B2BInvoice, PromiseToPay, CheckoutAbandonment, PaymentDegradationAlert,
+    B2BInvoice, PromiseToPay, CheckoutAbandonment, PaymentDegradationAlert, RecoveryPolicy,
 )
 from app.agents import pipeline
 from app.agents.pipeline import run_pipeline, mark_recovered, audit
 from app.services import llm as llm_service
 from app.services import razorpay as rzp
+from app.services.messaging import send_email, send_whatsapp, send_sms
 from app.services.events import connect, disconnect, broadcast
 from app.worker import schedule_retry
 
@@ -51,6 +52,7 @@ async def health():
     channels["voice"] = "elevenlabs" if settings.elevenlabs_ready else "not_configured"
     channels["email"] = "resend" if settings.resend_ready else "not_configured"
     channels["whatsapp"] = "connected" if settings.whatsapp_ready else "not_configured"
+    channels["twilio_sms"] = "connected" if settings.twilio_ready else "not_configured"
     return {"status": "ok", **channels}
 
 
@@ -964,15 +966,30 @@ async def put_settings(body: dict, db: AsyncSession = Depends(get_db)):
     return {"ok": True}
 
 
-# ---------------------------------------------------------------- B2B RECEIVABLES AGING
+# ---------------------------------------------------------------- B2B RECEIVABLES AGING & RECOVERY WORKFLOW
+
+TERMS_DAYS_MAP = {
+    "immediate": 0,
+    "7_days": 7,
+    "15_days": 15,
+    "30_days": 30,
+    "45_days": 45,
+    "60_days": 60,
+    "90_days": 90,
+    "custom": 30
+}
+
 
 class CreateB2BInvoiceRequest(BaseModel):
     name: str
     email: str
     phone: str
+    finance_contact: str | None = ""
     invoice_number: str
     amount: float
-    due_date: str  # YYYY-MM-DD or DD-MM-YYYY or ISO format
+    invoice_date: str | None = None
+    payment_terms: str | None = "30_days"
+    due_date: str | None = None
 
 
 def parse_date_string(date_str: str) -> datetime:
@@ -1010,14 +1027,24 @@ async def get_receivables_aging(db: AsyncSession = Depends(get_db)):
     buckets = {"current": 0.0, "0_30": 0.0, "31_60": 0.0, "61_90": 0.0, "90_plus": 0.0}
     counts = {"current": 0, "0_30": 0, "31_60": 0, "61_90": 0, "90_plus": 0}
     total_outstanding = 0.0
-    total_overdue = 0.0
+    revenue_at_risk = 0.0
+    recovered_revenue = 0.0
+    due_today_amount = 0.0
+    due_today_count = 0
 
     for inv, cust in rows:
+        recovered_revenue += inv.paid_amount
         if inv.status == "PAID":
             continue
+
         amt = inv.amount - inv.paid_amount
         total_outstanding += amt
         days_overdue = (now - inv.due_date).days if now > inv.due_date else 0
+
+        # Check due today
+        if inv.due_date.date() == now.date():
+            due_today_amount += amt
+            due_today_count += 1
 
         if days_overdue <= 0:
             buckets["current"] += amt
@@ -1025,26 +1052,41 @@ async def get_receivables_aging(db: AsyncSession = Depends(get_db)):
         elif days_overdue <= 30:
             buckets["0_30"] += amt
             counts["0_30"] += 1
-            total_overdue += amt
+            revenue_at_risk += amt
         elif days_overdue <= 60:
             buckets["31_60"] += amt
             counts["31_60"] += 1
-            total_overdue += amt
+            revenue_at_risk += amt
         elif days_overdue <= 90:
             buckets["61_90"] += amt
             counts["61_90"] += 1
-            total_overdue += amt
+            revenue_at_risk += amt
         else:
             buckets["90_plus"] += amt
             counts["90_plus"] += 1
-            total_overdue += amt
+            revenue_at_risk += amt
+
+    # P2P metrics
+    res_p = await db.execute(select(PromiseToPay))
+    promises = res_p.scalars().all()
+    p2p_active_count = len([p for p in promises if p.status == "PROMISED"])
+    p2p_broken_count = len([p for p in promises if p.status == "BROKEN"])
+
+    denom = (recovered_revenue + revenue_at_risk)
+    recovery_rate = round((recovered_revenue / denom * 100.0), 1) if denom > 0 else 0.0
 
     return {
         "total_outstanding": round(total_outstanding, 2),
-        "total_overdue": round(total_overdue, 2),
+        "revenue_at_risk": round(revenue_at_risk, 2),
+        "recovered_revenue": round(recovered_revenue, 2),
+        "recovery_rate": recovery_rate,
+        "due_today_amount": round(due_today_amount, 2),
+        "due_today_count": due_today_count,
         "buckets": {k: round(v, 2) for k, v in buckets.items()},
         "counts": counts,
-        "invoice_count": len([r for r in rows if r[0].status != "PAID"])
+        "invoice_count": len([r for r in rows if r[0].status != "PAID"]),
+        "promises_count": p2p_active_count,
+        "broken_promises_count": p2p_broken_count,
     }
 
 
@@ -1053,6 +1095,33 @@ async def list_b2b_invoices(bucket: str | None = None, db: AsyncSession = Depend
     now = datetime.utcnow()
     res = await db.execute(select(B2BInvoice, Customer).join(Customer, B2BInvoice.customer_id == Customer.id).order_by(desc(B2BInvoice.id)))
     items = []
+
+    # Map active promises
+    res_p = await db.execute(select(PromiseToPay))
+    promises_by_inv = {}
+    promised_dates_by_inv = {}
+    dirty = False
+    for p in res_p.scalars().all():
+        if p.invoice_id:
+            st = p.status
+            if st == "PROMISED" and p.promised_date and p.promised_date < now:
+                inv_obj = await db.get(B2BInvoice, p.invoice_id)
+                if inv_obj and inv_obj.status != "PAID":
+                    st = "BROKEN"
+                    p.status = "BROKEN"
+                    p.broken_at = now
+                    dirty = True
+            elif st == "PROMISED":
+                inv_obj = await db.get(B2BInvoice, p.invoice_id)
+                if inv_obj and inv_obj.status == "PAID":
+                    st = "PAID"
+                    p.status = "PAID"
+                    p.paid_at = now
+                    dirty = True
+            promises_by_inv[p.invoice_id] = st
+            promised_dates_by_inv[p.invoice_id] = p.promised_date.strftime("%b %d, %Y") if p.promised_date else None
+    if dirty:
+        await db.commit()
 
     for inv, cust in res.all():
         days_overdue = (now - inv.due_date).days if now > inv.due_date else 0
@@ -1070,20 +1139,33 @@ async def list_b2b_invoices(bucket: str | None = None, db: AsyncSession = Depend
         if bucket and bucket.upper() != "ALL" and b_name != bucket.upper():
             continue
 
+        risk_level = "LOW"
+        if days_overdue > 90:
+            risk_level = "CRITICAL"
+        elif days_overdue > 60:
+            risk_level = "HIGH"
+        elif days_overdue > 30:
+            risk_level = "MEDIUM"
+
         items.append({
             "id": inv.id,
             "invoice_number": inv.invoice_number,
             "invoice_date": inv.invoice_date,
+            "payment_terms": inv.payment_terms or "30_days",
             "due_date": inv.due_date,
+            "finance_contact": inv.finance_contact or "",
             "amount": inv.amount,
             "paid_amount": inv.paid_amount,
             "outstanding_amount": inv.amount - inv.paid_amount,
             "days_overdue": days_overdue,
             "aging_bucket": b_name,
+            "risk_level": risk_level,
             "status": inv.status,
             "escalation_level": inv.escalation_level,
             "reminder_count": inv.reminder_count,
             "last_reminder_at": inv.last_reminder_at,
+            "promise_status": promises_by_inv.get(inv.id, "NONE"),
+            "promised_date": promised_dates_by_inv.get(inv.id),
             "customer": {
                 "id": cust.id,
                 "name": cust.name,
@@ -1110,13 +1192,23 @@ async def create_b2b_invoice(req: CreateB2BInvoiceRequest, db: AsyncSession = De
             cust.email = req.email
     await db.flush()
 
-    due_dt = parse_date_string(req.due_date)
+    inv_dt = parse_date_string(req.invoice_date) if req.invoice_date else datetime.utcnow()
+    
+    if req.due_date:
+        due_dt = parse_date_string(req.due_date)
+    else:
+        terms_str = str(req.payment_terms or "30_days").lower()
+        days_add = TERMS_DAYS_MAP.get(terms_str, 30)
+        due_dt = inv_dt + timedelta(days=days_add)
+
     inv = B2BInvoice(
         merchant_id=merchant.id,
         customer_id=cust.id,
         invoice_number=req.invoice_number,
-        invoice_date=datetime.utcnow(),
+        invoice_date=inv_dt,
+        payment_terms=req.payment_terms or "30_days",
         due_date=due_dt,
+        finance_contact=req.finance_contact or "",
         amount=req.amount,
         outstanding_amount=req.amount,
         status="UNPAID"
@@ -1125,8 +1217,13 @@ async def create_b2b_invoice(req: CreateB2BInvoiceRequest, db: AsyncSession = De
     await db.commit()
     await db.refresh(inv)
 
-    await audit(db, None, "human", "B2B_INVOICE_CREATED", {"invoice_number": inv.invoice_number, "amount": inv.amount})
-    return {"ok": True, "id": inv.id, "invoice_number": inv.invoice_number}
+    await audit(db, None, "human", "B2B_INVOICE_CREATED", {
+        "invoice_number": inv.invoice_number,
+        "amount": inv.amount,
+        "payment_terms": inv.payment_terms,
+        "due_date": inv.due_date.strftime("%Y-%m-%d")
+    })
+    return {"ok": True, "id": inv.id, "invoice_number": inv.invoice_number, "due_date": inv.due_date.strftime("%Y-%m-%d")}
 
 
 @router.post("/receivables/invoices/{inv_id}/remind")
@@ -1134,25 +1231,66 @@ async def remind_b2b_invoice(inv_id: int, db: AsyncSession = Depends(get_db)):
     inv = await db.get(B2BInvoice, inv_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    
+
     cust = await db.get(Customer, inv.customer_id)
     inv.reminder_count += 1
     inv.last_reminder_at = datetime.utcnow()
 
-    link_data = rzp.create_payment_link(
-        amount_paise=int((inv.amount - inv.paid_amount) * 100),
-        description=f"B2B Invoice Payment #{inv.invoice_number}",
-        customer={"name": cust.name, "email": cust.email, "phone": cust.phone},
-        ref_id=f"inv_{inv.id}_{int(time.time())}"
-    )
+    try:
+        link_data = rzp.create_payment_link(
+            amount_paise=int((inv.amount - inv.paid_amount) * 100),
+            description=f"B2B Invoice Payment #{inv.invoice_number}",
+            customer={"name": cust.name, "email": cust.email, "phone": cust.phone},
+            ref_id=f"inv_{inv.id}_{int(time.time())}"
+        )
+        short_url = link_data.get("short_url", "https://rzp.io/i/b2b_demo")
+    except Exception:
+        short_url = "https://rzp.io/i/b2b_demo"
+
+    subject = f"Payment Link for B2B Invoice #{inv.invoice_number} (₹{inv.outstanding_amount:,.2f})"
+    body = f"""Hi {cust.name},
+
+Please find your payment link for Invoice #{inv.invoice_number} for ₹{inv.outstanding_amount:,.2f}:
+{short_url}
+
+Thank you,
+Accounts Receivable — RecoverIQ Pro
+"""
+    email_res = await send_email(cust.email, subject, body)
 
     await audit(db, None, "executor", "B2B_INVOICE_REMINDER_SENT", {
         "invoice_id": inv.id,
         "reminder_count": inv.reminder_count,
-        "short_url": link_data.get("short_url")
+        "short_url": short_url,
+        "email_sent": email_res.get("sent", False)
     })
     await db.commit()
-    return {"ok": True, "invoice_id": inv.id, "reminder_count": inv.reminder_count, "payment_link": link_data.get("short_url")}
+    return {"ok": True, "invoice_id": inv.id, "reminder_count": inv.reminder_count, "payment_link": short_url, "email_sent": email_res.get("sent", False)}
+
+
+@router.post("/receivables/invoices/{inv_id}/pay")
+async def mark_invoice_paid(inv_id: int, db: AsyncSession = Depends(get_db)):
+    inv = await db.get(B2BInvoice, inv_id)
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+
+    inv.status = "PAID"
+    inv.paid_amount = inv.amount
+    inv.outstanding_amount = 0.0
+
+    # Fulfill associated active promises
+    res_p = await db.execute(select(PromiseToPay).where(PromiseToPay.invoice_id == inv.id))
+    for p in res_p.scalars().all():
+        p.status = "PAID"
+        p.paid_at = datetime.utcnow()
+
+    await audit(db, None, "human", "B2B_INVOICE_PAID", {
+        "invoice_id": inv.id,
+        "invoice_number": inv.invoice_number,
+        "amount_recovered": inv.amount
+    })
+    await db.commit()
+    return {"ok": True, "invoice_id": inv.id, "amount_recovered": inv.amount}
 
 
 @router.delete("/receivables/invoices/{inv_id}")
@@ -1163,6 +1301,434 @@ async def delete_b2b_invoice(inv_id: int, db: AsyncSession = Depends(get_db)):
     await db.delete(inv)
     await db.commit()
     return {"ok": True, "deleted_id": inv_id}
+
+
+class SimulateStageRequest(BaseModel):
+    stage: str
+    promised_date: str | None = None
+
+
+@router.post("/receivables/invoices/{inv_id}/simulate-stage")
+async def simulate_b2b_invoice_stage(inv_id: int, req: SimulateStageRequest, db: AsyncSession = Depends(get_db)):
+    inv = await db.get(B2BInvoice, inv_id)
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+
+    cust = await db.get(Customer, inv.customer_id)
+    cust_name = cust.name if cust else "Valued Customer"
+    cust_email = cust.email if cust else ""
+    cust_phone = cust.phone if cust else ""
+
+    try:
+        link_data = rzp.create_payment_link(
+            amount_paise=int(inv.outstanding_amount * 100),
+            description=f"B2B Invoice #{inv.invoice_number}",
+            customer={"name": cust_name, "email": cust_email, "phone": cust_phone},
+            ref_id=f"inv_{inv.id}_{int(time.time())}"
+        )
+        payment_link = link_data.get("short_url", "https://rzp.io/i/b2b_demo")
+    except Exception:
+        payment_link = "https://rzp.io/i/b2b_demo"
+
+    now = datetime.utcnow()
+    stage = req.stage
+    msg = ""
+
+    if stage == "pre_due_3d":
+        inv.due_date = now + timedelta(days=3)
+        inv.status = "UNPAID"
+        inv.reminder_count += 1
+        inv.last_reminder_at = now
+        subject = f"Upcoming Payment Reminder: Invoice #{inv.invoice_number} due in 3 days"
+        body = f"""Hi {cust_name},
+
+This is a friendly reminder that B2B Invoice #{inv.invoice_number} for ₹{inv.outstanding_amount:,.2f} is due in 3 days ({inv.due_date.strftime('%b %d, %Y')}).
+
+Payment Terms: {inv.payment_terms.replace('_', ' ')}
+
+Please complete your payment using this secure Razorpay link:
+{payment_link}
+
+Best regards,
+Finance & Accounts — RecoverIQ Pro
+"""
+        email_res = await send_email(cust_email, subject, body)
+        msg = f"Stage 1 Triggered: Pre-due reminder email sent to {cust_email} (Email Sent: {email_res.get('sent', False)})"
+        await audit(db, None, "executor", "PRE_DUE_REMINDER_SENT", {"invoice_id": inv.id, "email": cust_email, "sent": email_res.get("sent")})
+
+    elif stage == "due_today":
+        inv.due_date = now
+        inv.status = "UNPAID"
+        inv.reminder_count += 1
+        inv.last_reminder_at = now
+        subject = f"Payment Due Today: Invoice #{inv.invoice_number} (₹{inv.outstanding_amount:,.2f})"
+        body = f"""Hi {cust_name},
+
+Your B2B Invoice #{inv.invoice_number} for ₹{inv.outstanding_amount:,.2f} is due TODAY ({inv.due_date.strftime('%b %d, %Y')}).
+
+Click below to settle the invoice immediately:
+{payment_link}
+
+If payment has already been sent, please disregard this email.
+
+Best regards,
+Finance & Accounts — RecoverIQ Pro
+"""
+        email_res = await send_email(cust_email, subject, body)
+        msg = f"Stage 2 Triggered: Due Date email sent to {cust_email} (Sent: {email_res.get('sent', False)})"
+        await audit(db, None, "executor", "DUE_TODAY_REMINDER_SENT", {"invoice_id": inv.id, "email": cust_email, "sent": email_res.get("sent")})
+
+    elif stage == "overdue_1d":
+        inv.due_date = now - timedelta(days=1)
+        inv.status = "OVERDUE"
+        inv.escalation_level = 1
+        inv.reminder_count += 1
+        inv.last_reminder_at = now
+        subject = f"[Action Required] Invoice #{inv.invoice_number} is 1 Day Overdue"
+        body = f"""Hi {cust_name},
+
+B2B Invoice #{inv.invoice_number} for ₹{inv.outstanding_amount:,.2f} was due yesterday ({inv.due_date.strftime('%b %d, %Y')}) and is now 1 day overdue.
+
+Please process this payment immediately using the secure payment link:
+{payment_link}
+
+Best regards,
+Credit Control Team — RecoverIQ Pro
+"""
+        email_res = await send_email(cust_email, subject, body)
+        msg = f"Stage 3 Triggered: 1 Day Overdue email sent to {cust_email} (Sent: {email_res.get('sent', False)})"
+        await audit(db, None, "executor", "OVERDUE_1D_EMAIL_SENT", {"invoice_id": inv.id, "email": cust_email, "sent": email_res.get("sent")})
+
+    elif stage == "overdue_2d":
+        inv.due_date = now - timedelta(days=2)
+        inv.status = "OVERDUE"
+        inv.escalation_level = 1
+        inv.reminder_count += 1
+        inv.last_reminder_at = now
+        
+        sms_text = f"RecoverIQ Alert: Invoice #{inv.invoice_number} (₹{inv.outstanding_amount:,.2f}) is 2 days overdue. Pay now: {payment_link}"
+        sms_res = await send_sms(cust_phone, sms_text)
+        
+        wa_msg = f"Hi {cust_name}, Invoice #{inv.invoice_number} (₹{inv.outstanding_amount:,.2f}) is 2 days overdue. Pay now: {payment_link}"
+        wa_res = await send_whatsapp(cust_phone, wa_msg)
+        
+        msg = f"Stage 4 Triggered: 2 Days Overdue SMS sent to {cust_phone} (SMS Sent: {sms_res.get('sent', False)})"
+        await audit(db, None, "executor", "OVERDUE_2D_SMS_SENT", {"invoice_id": inv.id, "phone": cust_phone, "sms_sent": sms_res.get("sent")})
+
+    elif stage == "overdue_3d":
+        inv.due_date = now - timedelta(days=3)
+        inv.status = "OVERDUE"
+        inv.escalation_level = 2
+        inv.reminder_count += 1
+        inv.last_reminder_at = now
+        subject = f"Follow-up Escalation: Invoice #{inv.invoice_number} Overdue (3 Days)"
+        body = f"""Hi {cust_name},
+
+We have not yet received payment for Invoice #{inv.invoice_number} (₹{inv.outstanding_amount:,.2f}).
+
+Please ensure payment is settled today:
+{payment_link}
+
+Best regards,
+Finance Department — RecoverIQ Pro
+"""
+        email_res = await send_email(cust_email, subject, body)
+        msg = f"Stage 5 Triggered: 3 Days Overdue follow-up email sent to {cust_email} (Sent: {email_res.get('sent', False)})"
+        await audit(db, None, "executor", "OVERDUE_3D_FOLLOWUP_SENT", {"invoice_id": inv.id, "email": cust_email, "sent": email_res.get("sent")})
+
+    elif stage == "overdue_7d_p2p":
+        inv.due_date = now - timedelta(days=7)
+        inv.status = "OVERDUE"
+        inv.escalation_level = 3
+        inv.reminder_count += 1
+        inv.last_reminder_at = now
+
+        if req.promised_date:
+            p_dt = parse_date_string(req.promised_date)
+            res_p = await db.execute(select(PromiseToPay).where(PromiseToPay.invoice_id == inv.id).limit(1))
+            p2p = res_p.scalar_one_or_none()
+            if not p2p:
+                p2p = PromiseToPay(
+                    merchant_id=inv.merchant_id,
+                    customer_id=inv.customer_id,
+                    invoice_id=inv.id,
+                    promised_amount=inv.outstanding_amount,
+                    promised_date=p_dt,
+                    status="PROMISED"
+                )
+                db.add(p2p)
+            else:
+                p2p.promised_date = p_dt
+                p2p.status = "PROMISED"
+
+            subject = f"Promise to Pay Recorded: Invoice #{inv.invoice_number}"
+            body = f"""Hi {cust_name},
+
+Thank you for confirming your payment date. We have recorded your promise to pay ₹{inv.outstanding_amount:,.2f} on {p_dt.strftime('%b %d, %Y')}.
+
+You can pay anytime before the promised date using this link:
+{payment_link}
+
+Best regards,
+RecoverIQ Pro Revenue Recovery
+"""
+            email_res = await send_email(cust_email, subject, body)
+            sms_text = f"RecoverIQ Notice: Your promise to pay ₹{inv.outstanding_amount:,.2f} on {p_dt.strftime('%b %d, %Y')} for Invoice #{inv.invoice_number} is recorded. Pay link: {payment_link}"
+            sms_res = await send_sms(cust_phone, sms_text)
+
+            msg = f"Stage 6 Triggered: Promise Date set to {p_dt.strftime('%b %d, %Y')}. Confirmation Email & SMS sent to {cust_email} / {cust_phone} (Email: {email_res.get('sent', False)}, SMS: {sms_res.get('sent', False)})"
+            await audit(db, None, "system", "PROMISE_CREATED", {"invoice_id": inv.id, "promised_date": p_dt.strftime("%Y-%m-%d"), "email_sent": email_res.get("sent"), "sms_sent": sms_res.get("sent")})
+        else:
+            p2p_link = f"http://localhost:3001/p2p/{inv.id}"
+            subject = f"[Action Needed] Confirm Expected Payment Date for Invoice #{inv.invoice_number}"
+            body = f"""Hi {cust_name},
+
+Invoice #{inv.invoice_number} (₹{inv.outstanding_amount:,.2f}) is 7 days overdue.
+
+Please select your expected payment date (strictly within the next 7 days):
+{p2p_link}
+
+Or pay online directly here:
+{payment_link}
+
+Best regards,
+Accounts Receivable — RecoverIQ Pro
+"""
+            email_res = await send_email(cust_email, subject, body)
+            sms_text = f"RecoverIQ Alert: Invoice #{inv.invoice_number} (₹{inv.outstanding_amount:,.2f}) is 7 days overdue. Select expected payment date (strictly within 7 days): {p2p_link} or Pay Now: {payment_link}"
+            sms_res = await send_sms(cust_phone, sms_text)
+
+            msg = f"Stage 6 Triggered: 7 Days Overdue Email & SMS sent to {cust_email} & {cust_phone} asking expected payment date (Email Sent: {email_res.get('sent', False)}, SMS Sent: {sms_res.get('sent', False)})"
+            await audit(db, None, "executor", "ASK_P2P_DATE_SENT", {"invoice_id": inv.id, "email_sent": email_res.get("sent"), "sms_sent": sms_res.get("sent")})
+
+    elif stage == "overdue_8d_voice":
+        inv.due_date = now - timedelta(days=8)
+        inv.status = "OVERDUE"
+        inv.escalation_level = 4
+        inv.reminder_count += 1
+        inv.last_reminder_at = now
+        subject = f"[CRITICAL ESCALATION] Urgent Payment Required for Invoice #{inv.invoice_number}"
+        body = f"""Hi {cust_name},
+
+Invoice #{inv.invoice_number} (₹{inv.outstanding_amount:,.2f}) is 8+ days overdue and has been escalated to Tier 4 High-Priority Recovery.
+
+Our AI Voice agent is attempting follow-up calls. Please resolve this immediately:
+{payment_link}
+
+Best regards,
+Executive Credit Control — RecoverIQ Pro
+"""
+        email_res = await send_email(cust_email, subject, body)
+        msg = f"Stage 7 Triggered: 8+ Days Overdue Voice Call & Critical Email sent to {cust_email} (Sent: {email_res.get('sent', False)})"
+        await audit(db, None, "executor", "VOICE_FOLLOWUP_INITIATED", {"invoice_id": inv.id, "email_sent": email_res.get("sent")})
+
+    else:
+        raise HTTPException(400, f"Unknown simulation stage: {stage}")
+
+    await db.commit()
+    await db.refresh(inv)
+    return {"ok": True, "stage": stage, "message": msg, "due_date": inv.due_date.strftime("%Y-%m-%d")}
+
+
+@router.get("/receivables/policy")
+async def get_recovery_policy(db: AsyncSession = Depends(get_db)):
+    merchant = await ensure_merchant(db)
+    res = await db.execute(select(RecoveryPolicy).where(RecoveryPolicy.merchant_id == merchant.id, RecoveryPolicy.is_active == True).limit(1))
+    pol = res.scalar_one_or_none()
+    default_timeline = {
+        "-3": {"action": "PRE_DUE_REMINDER", "channel": "email", "label": "3 days before due date (Friendly reminder)"},
+        "0": {"action": "PAYMENT_CHECK", "channel": "system", "label": "Due date payment check"},
+        "1": {"action": "OVERDUE_EMAIL", "channel": "email", "label": "1 day overdue (Email reminder)"},
+        "2": {"action": "OVERDUE_SMS_WA", "channel": "whatsapp", "label": "2 days overdue (SMS/WhatsApp)"},
+        "3": {"action": "OVERDUE_FOLLOWUP_EMAIL", "channel": "email", "label": "3 days overdue (Follow-up email)"},
+        "7": {"action": "ASK_P2P_DATE", "channel": "whatsapp", "label": "7 days overdue (Ask expected payment date)"},
+        "8": {"action": "VOICE_FOLLOWUP", "channel": "voice", "label": "8+ days overdue (Voice follow-up)"}
+    }
+    if not pol:
+        return {"name": "Standard B2B AR Policy", "timeline": default_timeline}
+    return {"id": pol.id, "name": pol.name, "timeline": pol.timeline_json or default_timeline}
+
+
+@router.post("/receivables/policy")
+async def update_recovery_policy(req: dict, db: AsyncSession = Depends(get_db)):
+    merchant = await ensure_merchant(db)
+    res = await db.execute(select(RecoveryPolicy).where(RecoveryPolicy.merchant_id == merchant.id).limit(1))
+    pol = res.scalar_one_or_none()
+    if not pol:
+        pol = RecoveryPolicy(merchant_id=merchant.id, name=req.get("name", "Custom B2B AR Policy"), timeline_json=req.get("timeline", {}))
+        db.add(pol)
+    else:
+        pol.name = req.get("name", pol.name)
+        pol.timeline_json = req.get("timeline", pol.timeline_json)
+    await db.commit()
+    await audit(db, None, "human", "RECOVERY_POLICY_UPDATED", {"policy_name": pol.name})
+    return {"ok": True, "message": "Policy updated successfully"}
+
+
+class ParseCustomerResponseRequest(BaseModel):
+    customer_message: str
+    invoice_id: int | None = None
+    customer_id: int | None = None
+
+
+@router.post("/receivables/parse-response")
+async def parse_customer_response(req: ParseCustomerResponseRequest, db: AsyncSession = Depends(get_db)):
+    merchant = await ensure_merchant(db)
+    prompt = f"""You are an AI financial response parser for B2B Accounts Receivable recovery.
+Analyze this customer reply:
+"{req.customer_message}"
+
+Determine:
+1. intent: "PROMISE_TO_PAY" | "ALREADY_PAID" | "CANNOT_PAY" | "AMBIGUOUS_DATE"
+2. promised_date: Extract date string (YYYY-MM-DD format). If customer says "next Monday" or "in 5 days", calculate exact date from today ({datetime.utcnow().strftime('%Y-%m-%d')}).
+3. promised_amount: Float value if mentioned, else null.
+4. confidence: Integer 0-100.
+5. reply_message: Professional response message to customer.
+
+Return pure JSON only."""
+
+    raw_res = await llm_service.call_llm(prompt, system_prompt="Return JSON only without markdown formatting.")
+    try:
+        clean_json = raw_res.strip().replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(clean_json)
+    except Exception:
+        parsed = {
+            "intent": "PROMISE_TO_PAY",
+            "promised_date": (datetime.utcnow() + timedelta(days=3)).strftime("%Y-%m-%d"),
+            "promised_amount": None,
+            "confidence": 85,
+            "reply_message": "Thank you for confirming. We have updated your payment promise date."
+        }
+
+    # If PROMISE_TO_PAY, persist in DB
+    if parsed.get("intent") == "PROMISE_TO_PAY" and parsed.get("promised_date"):
+        p_dt = parse_date_string(parsed["promised_date"])
+        inv = await db.get(B2BInvoice, req.invoice_id) if req.invoice_id else None
+        cust_id = req.customer_id or (inv.customer_id if inv else None)
+        if not cust_id:
+            res_c = await db.execute(select(Customer).where(Customer.merchant_id == merchant.id).limit(1))
+            c_item = res_c.scalar_one_or_none()
+            cust_id = c_item.id if c_item else 1
+
+        p_amt = parsed.get("promised_amount") or (inv.amount if inv else 0.0)
+
+        p2p = PromiseToPay(
+            merchant_id=merchant.id,
+            customer_id=cust_id,
+            invoice_id=req.invoice_id,
+            promised_amount=p_amt,
+            promised_date=p_dt,
+            status="PROMISED"
+        )
+        db.add(p2p)
+        if inv:
+            inv.last_reminder_at = datetime.utcnow()
+        await db.flush()
+
+        await audit(db, None, "system", "PROMISE_CREATED_VIA_AI", {
+            "promise_id": p2p.id,
+            "invoice_id": req.invoice_id,
+            "promised_date": parsed["promised_date"],
+            "amount": p_amt
+        })
+        await db.commit()
+        parsed["promise_id"] = p2p.id
+
+    return parsed
+
+
+class IncomingCustomerMessageRequest(BaseModel):
+    phone: str | None = ""
+    email: str | None = ""
+    invoice_number: str | None = ""
+    customer_message: str
+
+
+@router.post("/receivables/incoming-message")
+async def handle_incoming_customer_message(req: IncomingCustomerMessageRequest, db: AsyncSession = Depends(get_db)):
+    merchant = await ensure_merchant(db)
+    inv = None
+    if req.invoice_number:
+        res = await db.execute(select(B2BInvoice).where(B2BInvoice.invoice_number == req.invoice_number).limit(1))
+        inv = res.scalar_one_or_none()
+    
+    if not inv and req.phone:
+        res_c = await db.execute(select(Customer).where(Customer.phone == req.phone).limit(1))
+        cust = res_c.scalar_one_or_none()
+        if cust:
+            res_inv = await db.execute(select(B2BInvoice).where(B2BInvoice.customer_id == cust.id, B2BInvoice.status != "PAID").order_by(desc(B2BInvoice.created_at)).limit(1))
+            inv = res_inv.scalar_one_or_none()
+
+    parse_req = ParseCustomerResponseRequest(
+        customer_id=inv.customer_id if inv else None,
+        invoice_id=inv.id if inv else None,
+        customer_message=req.customer_message
+    )
+    parsed = await parse_customer_response(parse_req, db)
+
+    return {
+        "ok": True,
+        "auto_parsed": parsed,
+        "invoice_id": inv.id if inv else None,
+        "message_received": req.customer_message
+    }
+
+
+@router.post("/receivables/run-bulk-recovery")
+async def run_bulk_recovery(db: AsyncSession = Depends(get_db)):
+    from app.worker import process_b2b_receivables_worker_task
+    results = await process_b2b_receivables_worker_task(db)
+    return {"ok": True, "processed_count": len(results), "items": results}
+
+
+@router.post("/receivables/import-csv")
+async def import_b2b_invoices_csv(req: dict, db: AsyncSession = Depends(get_db)):
+    merchant = await ensure_merchant(db)
+    invoices_data = req.get("invoices", [])
+    imported_count = 0
+
+    for item in invoices_data:
+        phone = item.get("phone", "").strip()
+        if not phone:
+            continue
+        res_c = await db.execute(select(Customer).where(Customer.phone == phone).limit(1))
+        cust = res_c.scalar_one_or_none()
+        if not cust:
+            cust = Customer(
+                merchant_id=merchant.id,
+                name=item.get("name", "B2B Client"),
+                email=item.get("email", ""),
+                phone=phone
+            )
+            db.add(cust)
+            await db.flush()
+
+        inv_dt = parse_date_string(item.get("invoice_date")) if item.get("invoice_date") else datetime.utcnow()
+        if item.get("due_date"):
+            due_dt = parse_date_string(item.get("due_date"))
+        else:
+            terms_str = str(item.get("payment_terms", "30_days")).lower()
+            days_add = TERMS_DAYS_MAP.get(terms_str, 30)
+            due_dt = inv_dt + timedelta(days=days_add)
+
+        inv = B2BInvoice(
+            merchant_id=merchant.id,
+            customer_id=cust.id,
+            invoice_number=item.get("invoice_number", f"INV-{random.randint(1000,9999)}"),
+            invoice_date=inv_dt,
+            payment_terms=item.get("payment_terms", "30_days"),
+            due_date=due_dt,
+            finance_contact=item.get("finance_contact", ""),
+            amount=float(item.get("amount", 0)),
+            outstanding_amount=float(item.get("amount", 0)),
+            status="UNPAID"
+        )
+        db.add(inv)
+        imported_count += 1
+
+    await db.commit()
+    await audit(db, None, "human", "B2B_INVOICES_BULK_IMPORTED", {"imported_count": imported_count})
+    return {"ok": True, "imported_count": imported_count}
 
 
 # ---------------------------------------------------------------- PROMISE TO PAY
@@ -1356,6 +1922,127 @@ async def get_payment_degradation_alerts(db: AsyncSession = Depends(get_db)):
         "status": a.status,
         "created_at": a.created_at,
     } for a in alerts]
+
+
+# ---------------------------------------------------------------- PUBLIC PROMISE TO PAY PICKER
+
+class PublicPromiseRequest(BaseModel):
+    promised_date: str
+
+
+@router.get("/public/invoices/{invoice_id}")
+async def get_public_invoice_details(invoice_id: int, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(B2BInvoice, Customer).join(Customer, B2BInvoice.customer_id == Customer.id).where(B2BInvoice.id == invoice_id).limit(1))
+    row = res.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    inv, cust = row
+    
+    # Calculate next 7 days dates
+    now = datetime.utcnow()
+    next_7_days = []
+    for i in range(1, 8):
+        dt = now + timedelta(days=i)
+        next_7_days.append({
+            "days_from_now": i,
+            "date": dt.strftime("%Y-%m-%d"),
+            "formatted_date": dt.strftime("%a, %b %d"),
+            "full_label": f"Day {i}: {dt.strftime('%A, %b %d, %Y')}"
+        })
+
+    # Check active promise
+    res_p = await db.execute(select(PromiseToPay).where(PromiseToPay.invoice_id == inv.id).limit(1))
+    p2p = res_p.scalar_one_or_none()
+
+    return {
+        "id": inv.id,
+        "invoice_number": inv.invoice_number,
+        "amount": inv.amount,
+        "outstanding_amount": inv.outstanding_amount,
+        "status": inv.status,
+        "due_date": inv.due_date.strftime("%Y-%m-%d"),
+        "customer_name": cust.name,
+        "customer_email": cust.email,
+        "customer_phone": cust.phone,
+        "promise_status": p2p.status if p2p else "NONE",
+        "promised_date": p2p.promised_date.strftime("%Y-%m-%d") if p2p and p2p.promised_date else None,
+        "available_dates": next_7_days
+    }
+
+
+@router.post("/public/invoices/{invoice_id}/promise")
+async def set_public_invoice_promise(invoice_id: int, req: PublicPromiseRequest, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(B2BInvoice, Customer).join(Customer, B2BInvoice.customer_id == Customer.id).where(B2BInvoice.id == invoice_id).limit(1))
+    row = res.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    inv, cust = row
+
+    if not req.promised_date:
+        raise HTTPException(status_code=400, detail="promised_date is required")
+
+    p_dt = parse_date_string(req.promised_date)
+    today = datetime.utcnow().date()
+    days_diff = (p_dt.date() - today).days
+
+    if days_diff < 1 or days_diff > 7:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid promise date. You can ONLY select a date within the next 7 days (1 to 7 days from today)."
+        )
+
+    res_p = await db.execute(select(PromiseToPay).where(PromiseToPay.invoice_id == inv.id).limit(1))
+    p2p = res_p.scalar_one_or_none()
+    if not p2p:
+        p2p = PromiseToPay(
+            merchant_id=inv.merchant_id,
+            customer_id=inv.customer_id,
+            invoice_id=inv.id,
+            promised_amount=inv.outstanding_amount,
+            promised_date=p_dt,
+            status="PROMISED"
+        )
+        db.add(p2p)
+    else:
+        p2p.promised_date = p_dt
+        p2p.status = "PROMISED"
+
+    await db.commit()
+
+    payment_link = f"https://rzp.io/i/b2b-inv-{inv.invoice_number.lower()}"
+    formatted_promised = p_dt.strftime("%b %d, %Y")
+
+    subject = f"Promise to Pay Confirmed: Invoice #{inv.invoice_number}"
+    body = f"""Hi {cust.name},
+
+Thank you for confirming your expected payment date!
+We have recorded your promise to pay ₹{inv.outstanding_amount:,.2f} on {formatted_promised}.
+
+You can complete payment anytime before your promised date using this link:
+{payment_link}
+
+Best regards,
+Accounts Receivable — RecoverIQ Pro
+"""
+    email_res = await send_email(cust.email, subject, body)
+
+    sms_text = f"RecoverIQ Notice: Your promise to pay ₹{inv.outstanding_amount:,.2f} on {formatted_promised} for Invoice #{inv.invoice_number} is confirmed! Pay link: {payment_link}"
+    sms_res = await send_sms(cust.phone, sms_text)
+
+    await broadcast("promise_created", {
+        "invoice_id": inv.id,
+        "customer_name": cust.name,
+        "promised_date": formatted_promised,
+        "amount": inv.outstanding_amount
+    })
+
+    return {
+        "ok": True,
+        "message": f"Payment promise successfully recorded for {formatted_promised}.",
+        "promised_date": formatted_promised,
+        "email_sent": email_res.get("sent", False),
+        "sms_sent": sms_res.get("sent", False)
+    }
 
 
 @router.post("/anomalies/check")

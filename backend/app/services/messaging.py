@@ -5,6 +5,7 @@ WhatsApp is optional (skipped if not configured).
 """
 
 import time
+import asyncio
 import httpx
 from app.core.config import settings
 from app.core.logging import logger
@@ -33,6 +34,27 @@ async def send_whatsapp(phone: str, message: str) -> dict:
         return {"sent": False, "channel": "whatsapp", "reason": str(e)}
 
 
+async def send_sms(phone: str, message: str) -> dict:
+    if not settings.twilio_ready:
+        logger.info("sms_skipped", reason="Twilio not configured")
+        return {"sent": False, "channel": "sms", "reason": "not_configured"}
+    try:
+        from twilio.rest import Client
+        def _dispatch():
+            client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
+            return client.messages.create(
+                body=message,
+                from_=settings.twilio_from_phone,
+                to=phone
+            )
+        msg = await asyncio.to_thread(_dispatch)
+        logger.info("sms_sent_success", to=phone, sid=msg.sid)
+        return {"sent": True, "channel": "sms", "api_call_id": msg.sid}
+    except Exception as e:
+        logger.error("sms_error", error=str(e))
+        return {"sent": False, "channel": "sms", "reason": str(e)}
+
+
 async def send_email(to: str, subject: str, body: str) -> dict:
     if not settings.resend_ready:
         logger.info("email_skipped", reason="Resend not configured")
@@ -45,9 +67,13 @@ async def send_email(to: str, subject: str, body: str) -> dict:
                 json={"from": "onboarding@resend.dev",
                       "to": [to], "subject": subject, "text": body},
             )
-            resp.raise_for_status()
-            return {"sent": True, "channel": "email",
-                    "api_call_id": resp.json().get("id", "")}
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                logger.info("email_sent_success", to=to, resend_id=data.get("id"))
+                return {"sent": True, "channel": "email", "api_call_id": data.get("id", "")}
+            else:
+                logger.error("email_send_failed", status=resp.status_code, response=resp.text)
+                return {"sent": False, "channel": "email", "reason": resp.text}
     except Exception as e:
         logger.error("email_error", error=str(e))
         return {"sent": False, "channel": "email", "reason": str(e)}

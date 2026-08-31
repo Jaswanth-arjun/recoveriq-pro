@@ -204,3 +204,36 @@ and end with a clear suggestion (e.g. "Approvals queue lo review cheyyandi"). Ma
         f"Approvals queue review cheyyandi."
     )
     return {"answer": answer, "engine": "fallback"}
+
+
+async def call_llm(prompt: str, system_prompt: str = "") -> str:
+    """General LLM caller returning raw text response from OpenRouter / Anthropic / Gemini."""
+    if settings.openrouter_ready:
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.openrouter_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": settings.openrouter_model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt or "You are an AI financial intent parser. Return JSON only."},
+                            {"role": "user", "content": prompt},
+                        ],
+                    },
+                )
+                if resp.status_code == 200:
+                    return resp.json()["choices"][0]["message"]["content"]
+        except Exception as e:
+            print("call_llm OpenRouter error:", e)
+
+    for caller in (_call_anthropic, _call_gemini, _call_openrouter):
+        res = await caller(prompt)
+        if res:
+            return json.dumps(res)
+
+    return ""
+

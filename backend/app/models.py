@@ -206,7 +206,9 @@ class B2BInvoice(Base):
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"))
     invoice_number: Mapped[str] = mapped_column(String(64))
     invoice_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    payment_terms: Mapped[str] = mapped_column(String(32), default="30_days")  # immediate, 7_days, 15_days, 30_days, 45_days, 60_days, 90_days, custom
     due_date: Mapped[datetime] = mapped_column(DateTime)
+    finance_contact: Mapped[str] = mapped_column(String(120), default="")
     amount: Mapped[float] = mapped_column(Float, default=0.0)
     paid_amount: Mapped[float] = mapped_column(Float, default=0.0)
     outstanding_amount: Mapped[float] = mapped_column(Float, default=0.0)
@@ -214,6 +216,16 @@ class B2BInvoice(Base):
     escalation_level: Mapped[int] = mapped_column(Integer, default=0)
     last_reminder_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="UNPAID")  # UNPAID | PAID | OVERDUE | CANCELLED
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class RecoveryPolicy(Base):
+    __tablename__ = "recovery_policies"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    merchant_id: Mapped[int] = mapped_column(ForeignKey("merchants.id"))
+    name: Mapped[str] = mapped_column(String(120), default="Standard B2B AR Policy")
+    timeline_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

@@ -71,6 +71,16 @@ export default function ReceivablesPage() {
     }
   };
 
+  const handleDeleteInvoice = async (invId) => {
+    if (!confirm("Are you sure you want to delete this invoice?")) return;
+    try {
+      await api(`/receivables/invoices/${invId}`, { method: "DELETE" });
+      loadData();
+    } catch (err) {
+      alert(err.message || "Failed to delete invoice");
+    }
+  };
+
   const bucketsList = [
     { key: "ALL", label: "All Invoices" },
     { key: "CURRENT", label: "Current (Not Due)" },
@@ -216,13 +226,22 @@ export default function ReceivablesPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <button
-                        onClick={() => handleRemind(inv.id)}
-                        disabled={remindingId === inv.id}
-                        className="rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:opacity-50"
-                      >
-                        {remindingId === inv.id ? "Sending..." : "Send Reminder & Link"}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleRemind(inv.id)}
+                          disabled={remindingId === inv.id}
+                          className="rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:opacity-50"
+                        >
+                          {remindingId === inv.id ? "Sending..." : "Send Reminder & Link"}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteInvoice(inv.id)}
+                          className="rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 px-2.5 py-1 text-[11px] font-semibold transition-colors"
+                          title="Delete Invoice"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))

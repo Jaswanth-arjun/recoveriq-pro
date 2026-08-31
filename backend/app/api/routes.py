@@ -1155,6 +1155,16 @@ async def remind_b2b_invoice(inv_id: int, db: AsyncSession = Depends(get_db)):
     return {"ok": True, "invoice_id": inv.id, "reminder_count": inv.reminder_count, "payment_link": link_data.get("short_url")}
 
 
+@router.delete("/receivables/invoices/{inv_id}")
+async def delete_b2b_invoice(inv_id: int, db: AsyncSession = Depends(get_db)):
+    inv = await db.get(B2BInvoice, inv_id)
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    await db.delete(inv)
+    await db.commit()
+    return {"ok": True, "deleted_id": inv_id}
+
+
 # ---------------------------------------------------------------- PROMISE TO PAY
 
 class CreatePromiseRequest(BaseModel):

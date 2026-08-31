@@ -1,0 +1,213 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Fraunces:ital,opsz,wght@0,9..144,100..900;1,9..144,100..900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --leaf: oklch(0.58 0.11 145);
+  --leaf-deep: oklch(0.34 0.07 148);
+  --cream: oklch(0.97 0.02 95);
+  --sun: oklch(0.82 0.13 82);
+  --earth: oklch(0.5 0.07 70);
+  --ink: oklch(0.24 0.03 145);
+  --glass-line: rgba(255, 255, 255, 0.55);
+
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+
+  --primary: oklch(0.45 0.1 148);
+  --primary-foreground: oklch(0.98 0.01 95);
+  --accent: oklch(0.82 0.13 82);
+  --accent-foreground: oklch(0.28 0.05 70);
+  --foreground: oklch(0.24 0.03 145);
+  --muted-foreground: oklch(0.46 0.03 145);
+  --shadow-glass: 0 24px 60px -20px oklch(0.3 0.06 148 / 45%);
+}
+
+html,
+body {
+  background-color: #0a0e17;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-height: 100vh;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0e17;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+@keyframes pulse-live {
+  0% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 18px 4px rgba(52, 211, 153, 0.25);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
+  }
+}
+
+.pulse-live {
+  animation: pulse-live 1.2s ease-out;
+}
+
+/* ── GreenBasket Morning Magic Design System Utilities ─────────────────────────────────── */
+
+.glass-panel {
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.72),
+    rgba(255, 255, 255, 0.45)
+  );
+  backdrop-filter: blur(22px) saturate(150%);
+  border: 1px solid var(--glass-line);
+  box-shadow: var(--shadow-glass);
+}
+
+.glass-soft {
+  background: rgba(255, 255, 255, 0.46);
+  backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+}
+
+.gb-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(63, 138, 78, 0.55) transparent;
+}
+.gb-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.gb-scroll::-webkit-scrollbar-thumb {
+  background: rgba(63, 138, 78, 0.55);
+  border-radius: 99px;
+}
+.gb-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.display-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 0.95;
+}
+
+@keyframes gb-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes gb-burst {
+  from {
+    opacity: 0.9;
+    transform: scale(0.4);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+
+@keyframes gb-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+@keyframes gb-bounce-down {
+  0%, 100% { transform: translateY(0); opacity: 0.55; }
+  50% { transform: translateY(6px); opacity: 1; }
+}
+
+@keyframes gb-float-leaf {
+  0% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-12px) rotate(8deg); }
+  100% { transform: translateY(6px) rotate(-6deg); }
+}
+
+@keyframes gb-letter-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(45px) scale(0.4) rotate(-8deg);
+    filter: blur(10px);
+  }
+  65% {
+    opacity: 1;
+    transform: translateY(-10px) scale(1.15) rotate(2deg);
+    filter: blur(0px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0deg);
+    filter: blur(0px);
+  }
+}
+
+@keyframes gb-letter-flyin {
+  0% {
+    opacity: 0;
+    transform: translateY(-90px) scale(0.2) rotate(-20deg);
+    filter: blur(16px);
+  }
+  68% {
+    opacity: 1;
+    transform: translateY(14px) scale(1.28) rotate(5deg);
+    filter: blur(0px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0deg);
+    filter: blur(0px);
+  }
+}
+
+@keyframes gb-middle-action {
+  0% {
+    opacity: 0;
+    transform: translateY(28px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes gb-shimmer-glow {
+  0%, 100% {
+    opacity: 0.96;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 120ms !important;
+  }
+}

@@ -171,21 +171,36 @@ export function FinalBasket({ showCustomImage = false }) {
     try {
       const sub = await createSubscriptionRecord();
 
+      // Create Razorpay Subscription Mandate for Auto-Pay
+      let mandate = null;
+      try {
+        mandate = await api("/subscriptions/create-mandate", {
+          method: "POST",
+          body: JSON.stringify({
+            name: customerName,
+            email: customerEmail,
+            phone: customerPhone,
+            monthly_total: monthly,
+          }),
+        });
+      } catch (mErr) {
+        console.warn("Mandate API note:", mErr);
+      }
+
       if (window.Razorpay) {
         const options = {
           key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "rzp_test_TVGHgfyB8UpkvS",
-          amount: monthly * 100,
-          currency: "INR",
           name: "GreenBasket Morning Magic",
-          description: "Monthly Farm Fresh Subscription",
+          description: "Monthly Farm Fresh Auto-Pay Subscription Mandate",
           image: "https://cdn-icons-png.flaticon.com/512/1202/1202025.png",
           handler: function (response) {
+            const subId = response.razorpay_subscription_id || response.razorpay_payment_id || mandate?.subscription_id;
             setNotification({
               type: "success",
-              message: `🎉 Payment Successful! Payment ID: ${response.razorpay_payment_id}. Your 6 AM Fresh Delivery is ACTIVE for ${customerName}!`,
+              message: `🎉 Monthly Auto-Pay Mandate Activated! Sub ID: ${subId}. Your 6 AM Fresh Delivery is ACTIVE for ${customerName}!`,
             });
             if (sub?.id) {
-              setActiveSubscription({ ...sub, status: "PAID" });
+              setActiveSubscription({ ...sub, status: "PAID", subscription_code: subId });
             }
           },
           prefill: {
@@ -195,6 +210,14 @@ export function FinalBasket({ showCustomImage = false }) {
           },
           theme: { color: "#204b2b" },
         };
+
+        if (mandate?.subscription_id && !mandate.subscription_id.startsWith("sub_test_")) {
+          options.subscription_id = mandate.subscription_id;
+        } else {
+          options.amount = Math.round(monthly * 100);
+          options.currency = "INR";
+        }
+
         const rzp = new window.Razorpay(options);
         rzp.open();
       } else {

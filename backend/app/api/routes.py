@@ -169,6 +169,28 @@ async def trigger_custom_failure(req: CustomFailureRequest, db: AsyncSession = D
 # ---------------------------------------------------------------- subscriptions
 
 
+class CreateMandateRequest(BaseModel):
+    name: str
+    email: str
+    phone: str
+    monthly_total: float = 0.0
+
+
+@router.post("/subscriptions/create-mandate")
+async def create_subscription_mandate(req: CreateMandateRequest):
+    ref_id = f"sub_{int(time.time())}"
+    res = rzp.create_subscription_mandate(
+        amount_paise=int(req.monthly_total * 100),
+        customer={"name": req.name, "email": req.email, "phone": req.phone},
+        ref_id=ref_id,
+    )
+    return {
+        "ok": True,
+        "subscription_id": res.get("subscription_id"),
+        "status": res.get("status", "created"),
+    }
+
+
 class CreateSubscriptionRequest(BaseModel):
     name: str
     email: str

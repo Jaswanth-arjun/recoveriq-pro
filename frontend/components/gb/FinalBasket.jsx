@@ -25,6 +25,67 @@ export function FinalBasket({ showCustomImage = false }) {
 
   const [showOneTimeModal, setShowOneTimeModal] = useState(false);
   const [oneTimePaymentType, setOneTimePaymentType] = useState("COD");
+  const [sessionId] = useState(() => `sess_${Date.now()}_${Math.floor(Math.random() * 10000)}`);
+  const [orderCompleted, setOrderCompleted] = useState(false);
+
+  // Automatic Checkout Abandonment Detection
+  useEffect(() => {
+    if (orderCompleted || (monthly <= 0 && daily <= 0)) return;
+
+    let hasTriggered = false;
+    const triggerAbandonment = (reason = "tab_switch_or_exit") => {
+      if (hasTriggered || orderCompleted) return;
+      hasTriggered = true;
+
+      const payload = JSON.stringify({
+        session_id: sessionId,
+        name: customerName,
+        email: customerEmail,
+        phone: customerPhone,
+        cart_items: getItemsDetail(),
+        cart_value: monthly > 0 ? monthly : daily,
+        stage: "checkout_basket",
+        reason: reason,
+      });
+
+      const endpoint = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/checkouts/abandon`;
+      if (navigator.sendBeacon) {
+        const blob = new Blob([payload], { type: "application/json" });
+        navigator.sendBeacon(endpoint, blob);
+      } else {
+        fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload,
+          keepalive: true,
+        }).catch(() => {});
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        triggerAbandonment("tab_hidden_during_checkout");
+      }
+    };
+
+    const handlePageHide = () => {
+      triggerAbandonment("page_closed_during_checkout");
+    };
+
+    // Inactivity timer (30 seconds)
+    const inactivityTimer = setTimeout(() => {
+      triggerAbandonment("inactivity_timeout_during_checkout");
+    }, 30000);
+
+    window.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", handlePageHide);
+
+    return () => {
+      clearTimeout(inactivityTimer);
+      window.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, [sessionId, customerName, customerEmail, customerPhone, monthly, daily, orderCompleted, lines]);
 
   const getItemsDetail = () => {
     return lines.map((l) => ({
@@ -195,6 +256,7 @@ export function FinalBasket({ showCustomImage = false }) {
           image: "https://cdn-icons-png.flaticon.com/512/1202/1202025.png",
           handler: function (response) {
             const subId = response.razorpay_subscription_id || response.razorpay_payment_id || mandate?.subscription_id;
+            setOrderCompleted(true);
             setNotification({
               type: "success",
               message: `🎉 Monthly Auto-Pay Mandate Activated! Sub ID: ${subId}. Your 6 AM Fresh Delivery is ACTIVE for ${customerName}!`,

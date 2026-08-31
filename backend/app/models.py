@@ -199,5 +199,71 @@ class CopilotMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class B2BInvoice(Base):
+    __tablename__ = "b2b_invoices"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    merchant_id: Mapped[int] = mapped_column(ForeignKey("merchants.id"))
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"))
+    invoice_number: Mapped[str] = mapped_column(String(64))
+    invoice_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    due_date: Mapped[datetime] = mapped_column(DateTime)
+    amount: Mapped[float] = mapped_column(Float, default=0.0)
+    paid_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    outstanding_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    reminder_count: Mapped[int] = mapped_column(Integer, default=0)
+    escalation_level: Mapped[int] = mapped_column(Integer, default=0)
+    last_reminder_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="UNPAID")  # UNPAID | PAID | OVERDUE | CANCELLED
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class PromiseToPay(Base):
+    __tablename__ = "promise_to_pay"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    merchant_id: Mapped[int] = mapped_column(ForeignKey("merchants.id"))
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"))
+    invoice_id: Mapped[int | None] = mapped_column(ForeignKey("b2b_invoices.id"), nullable=True)
+    failure_event_id: Mapped[int | None] = mapped_column(ForeignKey("failure_events.id"), nullable=True)
+    promised_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    promised_date: Mapped[datetime] = mapped_column(DateTime)
+    status: Mapped[str] = mapped_column(String(32), default="PROMISED")  # PENDING | PROMISED | PAID | BROKEN | CANCELLED
+    reminder_count: Mapped[int] = mapped_column(Integer, default=0)
+    broken_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class CheckoutAbandonment(Base):
+    __tablename__ = "checkout_abandonments"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    merchant_id: Mapped[int] = mapped_column(ForeignKey("merchants.id"))
+    session_id: Mapped[str] = mapped_column(String(128))
+    customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), nullable=True)
+    cart_items: Mapped[list] = mapped_column(JSON, default=list)
+    cart_value: Mapped[float] = mapped_column(Float, default=0.0)
+    abandonment_stage: Mapped[str] = mapped_column(String(64), default="checkout_form")
+    abandonment_reason: Mapped[str] = mapped_column(String(128), default="inactivity_or_exit")
+    status: Mapped[str] = mapped_column(String(32), default="ABANDONED")  # ABANDONED | RECOVERY_INITIATED | RECOVERED | EXPIRED
+    failure_event_id: Mapped[int | None] = mapped_column(ForeignKey("failure_events.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class PaymentDegradationAlert(Base):
+    __tablename__ = "payment_degradation_alerts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    merchant_id: Mapped[int] = mapped_column(ForeignKey("merchants.id"))
+    gateway: Mapped[str] = mapped_column(String(64), default="Razorpay")
+    baseline_success_rate: Mapped[float] = mapped_column(Float, default=95.0)
+    current_success_rate: Mapped[float] = mapped_column(Float, default=100.0)
+    drop_percentage: Mapped[float] = mapped_column(Float, default=0.0)
+    affected_payments_count: Mapped[int] = mapped_column(Integer, default=0)
+    top_error_code: Mapped[str] = mapped_column(String(64), default="")
+    severity: Mapped[str] = mapped_column(String(16), default="LOW")  # LOW | MEDIUM | HIGH | CRITICAL
+    ai_diagnosis: Mapped[dict] = mapped_column(JSON, default=dict)
+    recommended_action: Mapped[str] = mapped_column(String(64), default="SMART_RETRY")
+    status: Mapped[str] = mapped_column(String(32), default="ACTIVE")  # ACTIVE | RESOLVED | ACKNOWLEDGED
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 Index("ix_failure_status", FailureEvent.status)
 Index("ix_audit_event", AuditLog.failure_event_id)

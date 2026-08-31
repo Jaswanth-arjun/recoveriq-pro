@@ -8,6 +8,8 @@ import useLive from "../lib/useLive";
 
 const NAV = [
   { href: "/", label: "Dashboard" },
+  { href: "/receivables", label: "B2B Receivables" },
+  { href: "/promises", label: "Promises to Pay" },
   { href: "/subscriptions", label: "Subscribers & Delivery" },
   { href: "/diagnoses", label: "Diagnoses" },
   { href: "/approvals", label: "Approvals" },

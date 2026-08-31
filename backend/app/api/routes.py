@@ -13,6 +13,7 @@ from app.core.db import get_db, SessionLocal, engine
 from app.models import (
     Merchant, Customer, Subscription, OneTimeOrder, Payment, FailureEvent, Diagnosis, Decision,
     PolicyCheck, Action, Outcome, AuditLog, VoiceCall, CopilotMessage,
+    B2BInvoice, PromiseToPay, CheckoutAbandonment, PaymentDegradationAlert,
 )
 from app.agents import pipeline
 from app.agents.pipeline import run_pipeline, mark_recovered, audit
@@ -961,6 +962,364 @@ async def put_settings(body: dict, db: AsyncSession = Depends(get_db)):
     await audit(db, None, "human", "SETTINGS_UPDATED", body)
     await db.commit()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- B2B RECEIVABLES AGING
+
+class CreateB2BInvoiceRequest(BaseModel):
+    name: str
+    email: str
+    phone: str
+    invoice_number: str
+    amount: float
+    due_date: str  # YYYY-MM-DD
+
+
+@router.get("/receivables/aging")
+async def get_receivables_aging(db: AsyncSession = Depends(get_db)):
+    now = datetime.utcnow()
+    res = await db.execute(select(B2BInvoice, Customer).join(Customer, B2BInvoice.customer_id == Customer.id))
+    rows = res.all()
+    
+    buckets = {"current": 0.0, "0_30": 0.0, "31_60": 0.0, "61_90": 0.0, "90_plus": 0.0}
+    counts = {"current": 0, "0_30": 0, "31_60": 0, "61_90": 0, "90_plus": 0}
+    total_outstanding = 0.0
+    total_overdue = 0.0
+
+    for inv, cust in rows:
+        if inv.status == "PAID":
+            continue
+        amt = inv.amount - inv.paid_amount
+        total_outstanding += amt
+        days_overdue = (now - inv.due_date).days if now > inv.due_date else 0
+
+        if days_overdue <= 0:
+            buckets["current"] += amt
+            counts["current"] += 1
+        elif days_overdue <= 30:
+            buckets["0_30"] += amt
+            counts["0_30"] += 1
+            total_overdue += amt
+        elif days_overdue <= 60:
+            buckets["31_60"] += amt
+            counts["31_60"] += 1
+            total_overdue += amt
+        elif days_overdue <= 90:
+            buckets["61_90"] += amt
+            counts["61_90"] += 1
+            total_overdue += amt
+        else:
+            buckets["90_plus"] += amt
+            counts["90_plus"] += 1
+            total_overdue += amt
+
+    return {
+        "total_outstanding": round(total_outstanding, 2),
+        "total_overdue": round(total_overdue, 2),
+        "buckets": {k: round(v, 2) for k, v in buckets.items()},
+        "counts": counts,
+        "invoice_count": len([r for r in rows if r[0].status != "PAID"])
+    }
+
+
+@router.get("/receivables/invoices")
+async def list_b2b_invoices(bucket: str | None = None, db: AsyncSession = Depends(get_db)):
+    now = datetime.utcnow()
+    res = await db.execute(select(B2BInvoice, Customer).join(Customer, B2BInvoice.customer_id == Customer.id).order_by(desc(B2BInvoice.id)))
+    items = []
+
+    for inv, cust in res.all():
+        days_overdue = (now - inv.due_date).days if now > inv.due_date else 0
+        
+        b_name = "CURRENT"
+        if days_overdue > 90:
+            b_name = "90_PLUS"
+        elif days_overdue > 60:
+            b_name = "61_90"
+        elif days_overdue > 30:
+            b_name = "31_60"
+        elif days_overdue > 0:
+            b_name = "0_30"
+
+        if bucket and bucket.upper() != "ALL" and b_name != bucket.upper():
+            continue
+
+        items.append({
+            "id": inv.id,
+            "invoice_number": inv.invoice_number,
+            "invoice_date": inv.invoice_date,
+            "due_date": inv.due_date,
+            "amount": inv.amount,
+            "paid_amount": inv.paid_amount,
+            "outstanding_amount": inv.amount - inv.paid_amount,
+            "days_overdue": days_overdue,
+            "aging_bucket": b_name,
+            "status": inv.status,
+            "escalation_level": inv.escalation_level,
+            "reminder_count": inv.reminder_count,
+            "last_reminder_at": inv.last_reminder_at,
+            "customer": {
+                "id": cust.id,
+                "name": cust.name,
+                "email": cust.email,
+                "phone": cust.phone,
+            }
+        })
+
+    return items
+
+
+@router.post("/receivables/invoices")
+async def create_b2b_invoice(req: CreateB2BInvoiceRequest, db: AsyncSession = Depends(get_db)):
+    merchant = await ensure_merchant(db)
+    res_c = await db.execute(select(Customer).where(Customer.phone == req.phone).limit(1))
+    cust = res_c.scalar_one_or_none()
+    if not cust:
+        cust = Customer(merchant_id=merchant.id, name=req.name, email=req.email, phone=req.phone)
+        db.add(cust)
+        await db.flush()
+
+    due_dt = datetime.strptime(req.due_date, "%Y-%m-%d")
+    inv = B2BInvoice(
+        merchant_id=merchant.id,
+        customer_id=cust.id,
+        invoice_number=req.invoice_number,
+        invoice_date=datetime.utcnow(),
+        due_date=due_dt,
+        amount=req.amount,
+        outstanding_amount=req.amount,
+        status="UNPAID"
+    )
+    db.add(inv)
+    await db.commit()
+    await db.refresh(inv)
+
+    await audit(db, None, "human", "B2B_INVOICE_CREATED", {"invoice_number": inv.invoice_number, "amount": inv.amount})
+    return {"ok": True, "id": inv.id, "invoice_number": inv.invoice_number}
+
+
+@router.post("/receivables/invoices/{inv_id}/remind")
+async def remind_b2b_invoice(inv_id: int, db: AsyncSession = Depends(get_db)):
+    inv = await db.get(B2BInvoice, inv_id)
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    
+    cust = await db.get(Customer, inv.customer_id)
+    inv.reminder_count += 1
+    inv.last_reminder_at = datetime.utcnow()
+
+    link_data = rzp.create_payment_link(
+        amount_paise=int((inv.amount - inv.paid_amount) * 100),
+        description=f"B2B Invoice Payment #{inv.invoice_number}",
+        customer={"name": cust.name, "email": cust.email, "phone": cust.phone},
+        ref_id=f"inv_{inv.id}_{int(time.time())}"
+    )
+
+    await audit(db, None, "executor", "B2B_INVOICE_REMINDER_SENT", {
+        "invoice_id": inv.id,
+        "reminder_count": inv.reminder_count,
+        "short_url": link_data.get("short_url")
+    })
+    await db.commit()
+    return {"ok": True, "invoice_id": inv.id, "reminder_count": inv.reminder_count, "payment_link": link_data.get("short_url")}
+
+
+# ---------------------------------------------------------------- PROMISE TO PAY
+
+class CreatePromiseRequest(BaseModel):
+    customer_name: str
+    customer_email: str
+    customer_phone: str
+    invoice_id: int | None = None
+    promised_amount: float
+    promised_date: str  # YYYY-MM-DD
+
+
+@router.post("/promise-to-pay")
+async def create_promise_to_pay(req: CreatePromiseRequest, db: AsyncSession = Depends(get_db)):
+    merchant = await ensure_merchant(db)
+    
+    try:
+        p_date = datetime.strptime(req.promised_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, "Invalid date format. Expected YYYY-MM-DD")
+    
+    if p_date.date() <= datetime.utcnow().date():
+        raise HTTPException(400, "Promised payment date must be in the future.")
+
+    res_c = await db.execute(select(Customer).where(Customer.phone == req.customer_phone).limit(1))
+    cust = res_c.scalar_one_or_none()
+    if not cust:
+        cust = Customer(merchant_id=merchant.id, name=req.customer_name, email=req.customer_email, phone=req.customer_phone)
+        db.add(cust)
+        await db.flush()
+
+    promise = PromiseToPay(
+        merchant_id=merchant.id,
+        customer_id=cust.id,
+        invoice_id=req.invoice_id,
+        promised_amount=req.promised_amount,
+        promised_date=p_date,
+        status="PROMISED"
+    )
+    db.add(promise)
+    await db.commit()
+    await db.refresh(promise)
+
+    await audit(db, None, "customer", "PROMISE_TO_PAY_CREATED", {
+        "promise_id": promise.id,
+        "promised_amount": promise.promised_amount,
+        "promised_date": req.promised_date
+    })
+    await broadcast("promise.created", {"id": promise.id, "customer": cust.name, "amount": promise.promised_amount})
+    return {"ok": True, "id": promise.id, "status": promise.status, "promised_date": req.promised_date}
+
+
+@router.get("/promise-to-pay")
+async def list_promises(status: str | None = None, db: AsyncSession = Depends(get_db)):
+    now = datetime.utcnow()
+    query = select(PromiseToPay, Customer).join(Customer, PromiseToPay.customer_id == Customer.id)
+    if status and status.upper() != "ALL":
+        query = query.where(PromiseToPay.status == status.upper())
+    query = query.order_by(desc(PromiseToPay.id))
+    
+    res = await db.execute(query)
+    items = []
+    for p, cust in res.all():
+        days_left = (p.promised_date.date() - now.date()).days
+        items.append({
+            "id": p.id,
+            "promised_amount": p.promised_amount,
+            "promised_date": p.promised_date,
+            "days_remaining": days_left,
+            "status": p.status,
+            "reminder_count": p.reminder_count,
+            "created_at": p.created_at,
+            "broken_at": p.broken_at,
+            "paid_at": p.paid_at,
+            "customer": {
+                "id": cust.id,
+                "name": cust.name,
+                "email": cust.email,
+                "phone": cust.phone,
+            }
+        })
+    return items
+
+
+@router.patch("/promise-to-pay/{promise_id}")
+async def update_promise_status(promise_id: int, body: dict, db: AsyncSession = Depends(get_db)):
+    p = await db.get(PromiseToPay, promise_id)
+    if not p:
+        raise HTTPException(404, "Promise not found")
+    
+    new_status = body.get("status", "").upper()
+    if new_status in ("PAID", "BROKEN", "CANCELLED"):
+        p.status = new_status
+        if new_status == "PAID":
+            p.paid_at = datetime.utcnow()
+        elif new_status == "BROKEN":
+            p.broken_at = datetime.utcnow()
+        await audit(db, p.failure_event_id, "human", "PROMISE_STATUS_UPDATED", {"promise_id": p.id, "status": new_status})
+        await db.commit()
+        await broadcast("promise.updated", {"id": p.id, "status": new_status})
+    return {"ok": True, "id": p.id, "status": p.status}
+
+
+# ---------------------------------------------------------------- AUTOMATIC CHECKOUT ABANDONMENT
+
+class CheckoutAbandonmentRequest(BaseModel):
+    session_id: str
+    name: str = "Shopper"
+    email: str = ""
+    phone: str = ""
+    cart_items: list = []
+    cart_value: float = 0.0
+    stage: str = "checkout_form"
+    reason: str = "inactivity_or_exit"
+
+
+@router.post("/checkouts/abandon")
+async def record_checkout_abandonment(req: CheckoutAbandonmentRequest, db: AsyncSession = Depends(get_db)):
+    merchant = await ensure_merchant(db)
+    
+    res_ex = await db.execute(select(CheckoutAbandonment).where(CheckoutAbandonment.session_id == req.session_id).limit(1))
+    if res_ex.scalar_one_or_none():
+        return {"ok": True, "duplicate": True}
+
+    res_c = await db.execute(select(Customer).where(Customer.phone == req.phone).limit(1)) if req.phone else None
+    cust = res_c.scalar_one_or_none() if res_c else None
+    if not cust and req.phone:
+        cust = Customer(merchant_id=merchant.id, name=req.name, email=req.email, phone=req.phone)
+        db.add(cust)
+        await db.flush()
+
+    ab = CheckoutAbandonment(
+        merchant_id=merchant.id,
+        session_id=req.session_id,
+        customer_id=cust.id if cust else None,
+        cart_items=req.cart_items,
+        cart_value=req.cart_value,
+        abandonment_stage=req.stage,
+        abandonment_reason=req.reason,
+        status="ABANDONED"
+    )
+    db.add(ab)
+    await db.flush()
+
+    payment = Payment(
+        merchant_id=merchant.id,
+        customer_id=cust.id if cust else 0,
+        amount_paise=int(req.cart_value * 100),
+        description=f"Abandoned Cart Session #{req.session_id[:8]}",
+        status="failed"
+    )
+    db.add(payment)
+    await db.flush()
+
+    event = await pipeline.ingest_failure(
+        db, merchant.id, "checkout.abandoned",
+        {"session_id": req.session_id, "cart_value": req.cart_value},
+        "ABANDONED_CHECKOUT", f"Customer abandoned checkout cart of ₹{req.cart_value}",
+        payment.amount_paise, payment_id=payment.id
+    )
+    await db.flush()
+    ab.failure_event_id = event.id
+    ab.status = "RECOVERY_INITIATED"
+    await db.commit()
+
+    result = await run_pipeline(db, event)
+    await broadcast("checkout.abandoned", {"session_id": req.session_id, "cart_value": req.cart_value, "event_id": event.id})
+    return {"ok": True, "abandonment_id": ab.id, "event_id": event.id, **result}
+
+
+# ---------------------------------------------------------------- PAYMENT DEGRADATION ANOMALY
+
+@router.get("/anomalies")
+async def get_payment_degradation_alerts(db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(PaymentDegradationAlert).order_by(desc(PaymentDegradationAlert.id)).limit(10))
+    alerts = res.scalars().all()
+    return [{
+        "id": a.id,
+        "gateway": a.gateway,
+        "baseline_success_rate": a.baseline_success_rate,
+        "current_success_rate": a.current_success_rate,
+        "drop_percentage": a.drop_percentage,
+        "affected_payments_count": a.affected_payments_count,
+        "top_error_code": a.top_error_code,
+        "severity": a.severity,
+        "ai_diagnosis": a.ai_diagnosis,
+        "recommended_action": a.recommended_action,
+        "status": a.status,
+        "created_at": a.created_at,
+    } for a in alerts]
+
+
+@router.post("/anomalies/check")
+async def trigger_degradation_check(db: AsyncSession = Depends(get_db)):
+    from app.worker import detect_payment_degradation_task
+    result = await detect_payment_degradation_task(db)
+    return {"ok": True, "result": result or "No degradation detected"}
 
 
 # ---------------------------------------------------------------- websocket

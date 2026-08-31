@@ -12,6 +12,7 @@ from app.api.routes import router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
     configure_logging()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -26,7 +27,17 @@ async def lifespan(app: FastAPI):
                 await conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN items_detail JSON DEFAULT '[]'"))
             except Exception:
                 pass
+
+    # Start background task loop
+    async def bg_loop():
+        from app.worker import run_all_background_tasks
+        while True:
+            await asyncio.sleep(15)
+            await run_all_background_tasks()
+
+    task = asyncio.create_task(bg_loop())
     yield
+    task.cancel()
 
 
 if settings.sentry_dsn:

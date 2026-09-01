@@ -26,10 +26,11 @@ def _client():
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry=retry_if_exception_type((ConnectionError, TimeoutError, RazorpayUnavailable)),
 )
-def create_payment_link(amount_paise: int, customer: dict, description: str, ref_id: str) -> dict:
+def create_payment_link(amount_paise: int, customer: dict, description: str, ref_id: str, notify: dict = None) -> dict:
     """Real Razorpay Payment Link with UPI enabled + REAL SMS/email notify."""
     client = _client()
     try:
+        notify_config = notify if notify is not None else {"sms": False, "email": True}
         link = client.payment_link.create({
             "amount": amount_paise,
             "currency": "INR",
@@ -40,7 +41,7 @@ def create_payment_link(amount_paise: int, customer: dict, description: str, ref
                 "email": customer.get("email", ""),
                 "contact": customer.get("phone", ""),
             },
-            "notify": {"sms": True, "email": True},
+            "notify": notify_config,
             "reminder_enable": True,
             "reference_id": f"recoveriq_{ref_id}",
         })

@@ -160,9 +160,16 @@ async def diagnose_and_decide(
 
 async def compose_recovery_message(
     customer_name: str, amount_inr: float, category: str,
-    language: str, pay_url: str = "",
+    language: str, pay_url: str = "", is_escalated_24h: bool = False,
 ) -> str:
     """Short recovery message in the customer's language (Telugu/Hindi/Hinglish)."""
+    if "abandon" in str(category).lower() or category == "checkout":
+        link_str = f" Complete order here: {pay_url}" if pay_url else ""
+        if is_escalated_24h:
+            return f"Namaste {customer_name}! Your GreenBasket cart is still waiting (Rs {int(amount_inr)}).{link_str} Use coupon RECOVER10 for 10% OFF!"
+        else:
+            return f"Namaste {customer_name}! You left fresh items in your GreenBasket cart (Rs {int(amount_inr)}).{link_str}"
+
     lang_map = {"te": "Telugu (Telugu script or Telugu-English mix)",
                 "hi": "Hindi (Devanagari or Hinglish)", "en": "English"}
     prompt = f"""Write a SHORT (max 25 words), warm, non-spammy payment recovery message in {lang_map.get(language, 'Hinglish')}.

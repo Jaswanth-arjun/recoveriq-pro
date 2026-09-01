@@ -12,6 +12,17 @@ export const useBasket = create((set) => ({
   quantities: {},
   lastAdded: null,
   drawerOpen: false,
+  customerName: "Jaswanth Nelluru",
+  customerEmail: "jaswanth@gmail.com",
+  customerPhone: "+919392443002",
+  addressLine: "Flat 402, Green Glen Towers, Road No 3",
+  city: "Hyderabad",
+  pincode: "500081",
+  landmark: "Near Fresh Mart Supermarket",
+  sessionId: `sess_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+  orderCompleted: false,
+  setCustomerInfo: (info) => set((s) => ({ ...s, ...info })),
+  setOrderCompleted: (orderCompleted) => set({ orderCompleted }),
   setQuantity: (id, qty) =>
     set((s) => {
       const next = { ...s.quantities };

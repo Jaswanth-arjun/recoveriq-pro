@@ -4,38 +4,85 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Sunrise, PackageCheck, Repeat, X, Sparkles, CreditCard, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { DELIVERY_DAYS_PER_MONTH, formatINR } from "../../data/products";
-import { useBasketTotals } from "../../store/basket";
-import { api } from "../../lib/api";
+import { useBasket, useBasketTotals } from "../../store/basket";
+import { api, API } from "../../lib/api";
 
 export function FinalBasket({ showCustomImage = false }) {
   const { lines, items, products, daily, monthly } = useBasketTotals();
   const [confirmed, setConfirmed] = useState(false);
 
-  const [customerName, setCustomerName] = useState("Rahul");
-  const [customerEmail, setCustomerEmail] = useState("jaswanthnelluru2004@gmail.com");
-  const [customerPhone, setCustomerPhone] = useState("+919392443002");
-  const [addressLine, setAddressLine] = useState("Flat 402, Green Glen Towers, Road No 3");
-  const [city, setCity] = useState("Hyderabad");
-  const [pincode, setPincode] = useState("500081");
-  const [landmark, setLandmark] = useState("Near Fresh Mart Supermarket");
+  const customerName = useBasket((s) => s.customerName);
+  const customerEmail = useBasket((s) => s.customerEmail);
+  const customerPhone = useBasket((s) => s.customerPhone);
+  const addressLine = useBasket((s) => s.addressLine);
+  const city = useBasket((s) => s.city);
+  const pincode = useBasket((s) => s.pincode);
+  const landmark = useBasket((s) => s.landmark);
+  const setCustomerInfo = useBasket((s) => s.setCustomerInfo);
+  const setOrderCompletedStore = useBasket((s) => s.setOrderCompleted);
+  const sessionId = useBasket((s) => s.sessionId);
+
+  const setCustomerName = (name) => setCustomerInfo({ customerName: name });
+  const setCustomerEmail = (email) => setCustomerInfo({ customerEmail: email });
+  const setCustomerPhone = (phone) => setCustomerInfo({ customerPhone: phone });
+  const setAddressLine = (addr) => setCustomerInfo({ addressLine: addr });
+  const setCity = (c) => setCustomerInfo({ city: c });
+  const setPincode = (p) => setCustomerInfo({ pincode: p });
+  const setLandmark = (l) => setCustomerInfo({ landmark: l });
   
+  const [couponInput, setCouponInput] = useState("");
+  const [discountPercent, setDiscountPercent] = useState(0);
+  const [couponStatus, setCouponStatus] = useState(null);
+
+  const applyCouponCode = (codeToTest = couponInput) => {
+    const code = codeToTest.trim().toUpperCase();
+    if (code === "RECOVER10" || code === "SAVE10") {
+      setDiscountPercent(10);
+      setCouponStatus({ type: "success", message: "🎉 10% Recovery Discount Applied via RECOVER10!" });
+    } else if (code === "RECOVER20") {
+      setDiscountPercent(20);
+      setCouponStatus({ type: "success", message: "🎉 20% VIP Recovery Discount Applied via RECOVER20!" });
+    } else if (!code) {
+      setDiscountPercent(0);
+      setCouponStatus(null);
+    } else {
+      setDiscountPercent(0);
+      setCouponStatus({ type: "error", message: "⚠️ Invalid coupon code. Try RECOVER10 for 10% off." });
+    }
+  };
+
+  const effectiveMonthly = Math.round(monthly * (1 - discountPercent / 100));
+  const effectiveDaily = Math.round(daily * (1 - discountPercent / 100));
+
   const [activeSubscription, setActiveSubscription] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notification, setNotification] = useState(null);
 
   const [showOneTimeModal, setShowOneTimeModal] = useState(false);
   const [oneTimePaymentType, setOneTimePaymentType] = useState("COD");
-  const [sessionId] = useState(() => `sess_${Date.now()}_${Math.floor(Math.random() * 10000)}`);
-  const [orderCompleted, setOrderCompleted] = useState(false);
+  const [orderCompleted, setOrderCompletedLocal] = useState(false);
+  const setOrderCompleted = (v) => { setOrderCompletedLocal(v); setOrderCompletedStore(v); };
 
-  // Automatic Checkout Abandonment Detection
+  // Auto-apply coupon code from URL parameters (e.g. /store?coupon=RECOVER10)
   useEffect(() => {
-    if (orderCompleted || (monthly <= 0 && daily <= 0)) return;
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const urlCoupon = params.get("coupon");
+    if (urlCoupon) {
+      setCouponInput(urlCoupon);
+      applyCouponCode(urlCoupon);
+      setConfirmed(true);
+    }
+  }, []);
 
-    let hasTriggered = false;
-    const triggerAbandonment = (reason = "tab_switch_or_exit") => {
-      if (hasTriggered || orderCompleted) return;
-      hasTriggered = true;
+  // Automatic Checkout Abandonment Detection & Realtime Sync
+  useEffect(() => {
+    if (orderCompleted) return;
+    const cartVal = monthly > 0 ? monthly : daily;
+    if (cartVal <= 0 && !customerName && !customerEmail && !customerPhone) return;
+
+    const triggerAbandonment = (reason = "tab_switch_or_exit", unloading = false) => {
+      if (orderCompleted) return;
 
       const payload = JSON.stringify({
         session_id: sessionId,
@@ -43,49 +90,73 @@ export function FinalBasket({ showCustomImage = false }) {
         email: customerEmail,
         phone: customerPhone,
         cart_items: getItemsDetail(),
-        cart_value: monthly > 0 ? monthly : daily,
+        cart_value: cartVal > 0 ? cartVal : 500,
         stage: "checkout_basket",
         reason: reason,
       });
 
       const endpoint = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/checkouts/abandon`;
-      if (navigator.sendBeacon) {
-        const blob = new Blob([payload], { type: "application/json" });
-        navigator.sendBeacon(endpoint, blob);
-      } else {
+
+      // sendBeacon cannot complete cross-origin requests that need a CORS
+      // preflight (Content-Type: application/json) — `text/plain` IS
+      // CORS-safelisted, so beacons must always use it (the backend parses
+      // the raw body bytes regardless of the content-type header).
+      const sendBeacon = () => {
+        if (typeof navigator === "undefined" || !navigator.sendBeacon) return false;
+        try {
+          const blob = new Blob([payload], { type: "text/plain" });
+          return navigator.sendBeacon(endpoint, blob);
+        } catch (e) {
+          return false;
+        }
+      };
+
+      const sendFetch = () => {
         fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: payload,
           keepalive: true,
         }).catch(() => {});
+      };
+
+      if (unloading) {
+        // Page is unloading: beacon (text/plain) is the reliable path.
+        if (!sendBeacon()) sendFetch();
+      } else {
+        // Page still alive: plain fetch handles CORS preflight correctly.
+        sendFetch();
       }
     };
 
+    // Auto-sync when customer enters details or opens checkout
+    const timer = setTimeout(() => {
+      if (customerName || customerEmail || customerPhone || cartVal > 0) {
+        triggerAbandonment("customer_details_entered");
+      }
+    }, 1000);
+
     const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
-        triggerAbandonment("tab_hidden_during_checkout");
+        triggerAbandonment("tab_hidden_during_checkout", true);
       }
     };
 
     const handlePageHide = () => {
-      triggerAbandonment("page_closed_during_checkout");
+      triggerAbandonment("page_closed_during_checkout", true);
     };
-
-    // Inactivity timer (30 seconds)
-    const inactivityTimer = setTimeout(() => {
-      triggerAbandonment("inactivity_timeout_during_checkout");
-    }, 30000);
 
     window.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pagehide", handlePageHide);
+    window.addEventListener("beforeunload", handlePageHide);
 
     return () => {
-      clearTimeout(inactivityTimer);
+      clearTimeout(timer);
       window.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pagehide", handlePageHide);
+      window.removeEventListener("beforeunload", handlePageHide);
     };
-  }, [sessionId, customerName, customerEmail, customerPhone, monthly, daily, orderCompleted, lines]);
+  }, [sessionId, customerName, customerEmail, customerPhone, monthly, daily, orderCompleted, lines, confirmed]);
 
   const getItemsDetail = () => {
     return lines.map((l) => ({
@@ -107,10 +178,10 @@ export function FinalBasket({ showCustomImage = false }) {
       if (payType === "RAZORPAY" && window.Razorpay) {
         const options = {
           key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "rzp_test_TVGHgfyB8UpkvS",
-          amount: Math.round(daily * 100),
+          amount: Math.round(effectiveDaily * 100),
           currency: "INR",
           name: "GreenBasket 1-Time Grocery Shopping",
-          description: "Fresh Grocery Items Order",
+          description: `Fresh Grocery Order ${discountPercent > 0 ? `(${discountPercent}% Discount Applied)` : ""}`,
           image: "https://cdn-icons-png.flaticon.com/512/1202/1202025.png",
           handler: async function (response) {
             try {
@@ -276,7 +347,7 @@ export function FinalBasket({ showCustomImage = false }) {
         if (mandate?.subscription_id && !mandate.subscription_id.startsWith("sub_test_")) {
           options.subscription_id = mandate.subscription_id;
         } else {
-          options.amount = Math.round(monthly * 100);
+          options.amount = Math.round(effectiveMonthly * 100);
           options.currency = "INR";
         }
 
@@ -321,6 +392,36 @@ export function FinalBasket({ showCustomImage = false }) {
       setNotification({
         type: "warning",
         message: `⚡ Monthly Auto-Pay Failed! Status updated to 'NOT PAID YET'. RecoverIQ Pro pipeline active (Event ID: ${res.event_id}).`,
+      });
+    } catch (err) {
+      setNotification({ type: "error", message: err.message });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSimulateAbandonment = async () => {
+    setIsSubmitting(true);
+    setNotification(null);
+    try {
+      const res = await api("/checkouts/abandon", {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: `sess_store_${Date.now()}`,
+          name: customerName,
+          email: customerEmail,
+          phone: customerPhone,
+          cart_items: getItemsDetail(),
+          cart_value: monthly > 0 ? monthly : daily,
+          stage: "checkout_basket",
+          reason: "user_abandoned_checkout_button",
+        }),
+      });
+      setConfirmed(false);
+      setShowOneTimeModal(false);
+      setNotification({
+        type: "warning",
+        message: `🛒 Checkout Abandonment Recorded for ${customerName} (${formatINR(monthly > 0 ? monthly : daily)})! Risk type: '🛒 Checkout Abandonment'. View Diagnoses page to manage recovery actions.`,
       });
     } catch (err) {
       setNotification({ type: "error", message: err.message });
@@ -701,7 +802,35 @@ export function FinalBasket({ showCustomImage = false }) {
               </div>
             )}
 
-            <div className="mt-5 space-y-2">
+            {/* Coupon Code Section */}
+            <div className="mt-3 text-left border-t border-dashed border-slate-200 pt-3">
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">
+                🏷️ Recovery Coupon Code (10% Off)
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={couponInput}
+                  onChange={(e) => setCouponInput(e.target.value)}
+                  placeholder="Enter RECOVER10 or SAVE10"
+                  className="flex-1 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-ink uppercase tracking-wider focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                />
+                <button
+                  type="button"
+                  onClick={() => applyCouponCode()}
+                  className="rounded-xl bg-emerald-800 hover:bg-emerald-700 px-4 py-2 text-xs font-bold text-white transition shadow-sm cursor-pointer"
+                >
+                  Apply
+                </button>
+              </div>
+              {couponStatus && (
+                <p className={`mt-1.5 text-[11px] font-bold ${couponStatus.type === "success" ? "text-emerald-700 animate-bounce" : "text-rose-600"}`}>
+                  {couponStatus.message}
+                </p>
+              )}
+            </div>
+
+            <div className="mt-4 space-y-2">
               <button
                 type="button"
                 disabled={isSubmitting}
@@ -712,10 +841,18 @@ export function FinalBasket({ showCustomImage = false }) {
                 className="w-full flex items-center justify-center gap-2 rounded-full bg-emerald-900 py-3 text-xs font-bold uppercase tracking-[0.2em] text-white transition hover:bg-emerald-800 shadow-md cursor-pointer"
               >
                 <CreditCard className="size-4 text-emerald-400" />
-                <span>Pay via Razorpay Test Checkout ({formatINR(monthly)})</span>
+                <span>Pay via Razorpay Test Checkout ({formatINR(effectiveMonthly)}){discountPercent > 0 ? ` (🎉 ${discountPercent}% OFF)` : ""}</span>
               </button>
 
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={handleSimulateAbandonment}
+                  className="rounded-xl border border-purple-400 bg-purple-500/10 px-2 py-2 text-[10px] font-bold uppercase text-purple-900 hover:bg-purple-500/20 cursor-pointer"
+                >
+                  🛒 Abandon Checkout
+                </button>
                 <button
                   type="button"
                   disabled={isSubmitting}
@@ -723,9 +860,9 @@ export function FinalBasket({ showCustomImage = false }) {
                     setConfirmed(false);
                     handleSimulateFailure("EXPIRED_CARD");
                   }}
-                  className="rounded-xl border border-rose-400 bg-rose-500/10 px-3 py-2 text-[10px] font-bold uppercase text-rose-900 hover:bg-rose-500/20 cursor-pointer"
+                  className="rounded-xl border border-rose-400 bg-rose-500/10 px-2 py-2 text-[10px] font-bold uppercase text-rose-900 hover:bg-rose-500/20 cursor-pointer"
                 >
-                  ⚡ Simulate Expired Card
+                  ⚡ Expired Card
                 </button>
                 <button
                   type="button"
@@ -734,9 +871,9 @@ export function FinalBasket({ showCustomImage = false }) {
                     setConfirmed(false);
                     handleSimulateFailure("INSUFFICIENT_FUNDS");
                   }}
-                  className="rounded-xl border border-amber-400 bg-amber-500/10 px-3 py-2 text-[10px] font-bold uppercase text-amber-950 hover:bg-amber-500/20 cursor-pointer"
+                  className="rounded-xl border border-amber-400 bg-amber-500/10 px-2 py-2 text-[10px] font-bold uppercase text-amber-950 hover:bg-amber-500/20 cursor-pointer"
                 >
-                  ⚡ Simulate No Funds
+                  ⚡ No Funds
                 </button>
               </div>
             </div>

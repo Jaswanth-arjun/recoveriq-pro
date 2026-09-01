@@ -31,6 +31,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://recoveriq:recoveriq@db:5432/recoveriq
       REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./backend:/app
     ports:
       - "8000:8000"
     depends_on:
@@ -46,6 +48,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://recoveriq:recoveriq@db:5432/recoveriq
       REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./backend:/app
     depends_on:
       backend:
         condition: service_started

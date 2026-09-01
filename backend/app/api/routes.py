@@ -20,6 +20,7 @@ from app.agents.pipeline import run_pipeline, mark_recovered, audit
 from app.services import llm as llm_service
 from app.services import razorpay as rzp
 from app.services import voice as voice_service
+from app.services import messaging
 from app.services.messaging import send_email, send_whatsapp, send_sms
 from app.services.events import connect, disconnect, broadcast
 from app.worker import schedule_retry
@@ -562,16 +563,41 @@ async def delete_one_time_order(order_id: int, db: AsyncSession = Depends(get_db
 
 @router.post("/reset")
 async def reset_database(db: AsyncSession = Depends(get_db)):
-    """Clear all failure events, customers, payments, and related data. Fresh start."""
+    """Clear all failure events, customers, payments, subscriptions, orders, invoices, and related data. Fresh start."""
     from sqlalchemy import text
     tables = [
-        "audit_log", "voice_calls", "copilot_messages",
-        "outcomes", "actions", "policy_checks", "decisions",
-        "diagnoses", "failure_events", "payments", "subscriptions", "customers",
+        "audit_log",
+        "voice_calls",
+        "copilot_messages",
+        "outcomes",
+        "actions",
+        "policy_checks",
+        "decisions",
+        "diagnoses",
+        "checkout_abandonments",
+        "promise_to_pay",
+        "b2b_invoices",
+        "recovery_policies",
+        "payment_degradation_alerts",
+        "failure_events",
+        "payments",
+        "subscriptions",
+        "one_time_orders",
+        "customers",
     ]
     for table in tables:
-        await db.execute(text(f"DELETE FROM {table}"))
-    await db.commit()
+        try:
+            await db.execute(text(f"TRUNCATE TABLE {table} CASCADE"))
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            try:
+                await db.execute(text(f"DELETE FROM {table}"))
+                await db.commit()
+            except Exception as e:
+                await db.rollback()
+                logger.warning(f"Could not clear table {table}: {e}")
+
     await broadcast("system.reset", {"status": "complete"})
     return {"ok": True, "cleared": tables}
 
@@ -666,26 +692,50 @@ async def metrics(db: AsyncSession = Depends(get_db)):
 @router.get("/failures")
 async def list_failures(db: AsyncSession = Depends(get_db)):
     res = await db.execute(
-        select(FailureEvent, Diagnosis, Decision, Action, Outcome)
+        select(FailureEvent, Diagnosis, Decision, Action, Outcome, Payment, Customer)
         .outerjoin(Diagnosis, Diagnosis.failure_event_id == FailureEvent.id)
         .outerjoin(Decision, Decision.failure_event_id == FailureEvent.id)
         .outerjoin(Action, Action.failure_event_id == FailureEvent.id)
         .outerjoin(Outcome, Outcome.failure_event_id == FailureEvent.id)
+        .outerjoin(Payment, FailureEvent.payment_id == Payment.id)
+        .outerjoin(Customer, Payment.customer_id == Customer.id)
         .order_by(desc(FailureEvent.id)).limit(200)
     )
     rows = res.all()
     seen, items = set(), []
-    for ev, diag, dec, act, out in rows:
+    for ev, diag, dec, act, out, pay, cust in rows:
         if ev.id in seen:
             continue
         seen.add(ev.id)
+
+        err = (ev.error_code or "").upper()
+        ev_t = (ev.event_type or "").lower()
+        if "abandon" in ev_t or "ABANDONED" in err:
+            risk_type = "🛒 Checkout Abandonment"
+        elif "sub" in ev_t or "SUBSCRIPTION" in err:
+            risk_type = "💳 Subscription Auto-Pay Failure"
+        elif "b2b" in ev_t or "INVOICE" in err:
+            risk_type = "🏢 B2B Overdue Invoice"
+        elif "INSUFFICIENT" in err:
+            risk_type = "❌ Insufficient Funds"
+        elif "EXPIRED" in err:
+            risk_type = "⚠️ Expired Card"
+        else:
+            risk_type = f"⚠️ Payment Failure ({err or 'UNKNOWN'})"
+
         items.append({
-            "id": ev.id, "error_code": ev.error_code,
+            "id": ev.id,
+            "event_type": ev.event_type,
+            "error_code": ev.error_code,
             "error_description": ev.error_description,
             "amount_inr": ev.amount_paise / 100,
             "amount": ev.amount_paise / 100,
             "status": ev.status,
             "created_at": ev.created_at,
+            "risk_type": risk_type,
+            "customer_name": cust.name if cust else "Shopper",
+            "customer_email": cust.email if cust else "",
+            "customer_phone": cust.phone if cust else "",
             "cause": diag.cause if diag else None,
             "category": diag.category if diag else None,
             "confidence": diag.confidence if diag else None,
@@ -697,6 +747,44 @@ async def list_failures(db: AsyncSession = Depends(get_db)):
             "recovered_inr": (out.recovered_paise / 100) if out and out.recovered else 0,
         })
     return items
+
+
+@router.delete("/failures/{event_id}")
+async def delete_failure(event_id: int, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import delete
+    event = await db.get(FailureEvent, event_id)
+    if not event:
+        res_ab = await db.execute(select(CheckoutAbandonment).where((CheckoutAbandonment.id == event_id) | (CheckoutAbandonment.failure_event_id == event_id)))
+        ab = res_ab.scalar_one_or_none()
+        if ab:
+            if ab.failure_event_id:
+                fe = await db.get(FailureEvent, ab.failure_event_id)
+                if fe:
+                    return await delete_failure(fe.id, db)
+            await db.delete(ab)
+            await db.commit()
+            await broadcast("failure.deleted", {"id": event_id})
+            return {"ok": True, "id": event_id}
+        return {"ok": True, "id": event_id, "deleted": False}
+
+    dec_res = await db.execute(select(Decision.id).where(Decision.failure_event_id == event_id))
+    dec_ids = dec_res.scalars().all()
+    if dec_ids:
+        await db.execute(delete(PolicyCheck).where(PolicyCheck.decision_id.in_(dec_ids)))
+
+    await db.execute(delete(Action).where(Action.failure_event_id == event_id))
+    await db.execute(delete(Decision).where(Decision.failure_event_id == event_id))
+    await db.execute(delete(Diagnosis).where(Diagnosis.failure_event_id == event_id))
+    await db.execute(delete(Outcome).where(Outcome.failure_event_id == event_id))
+    await db.execute(delete(AuditLog).where(AuditLog.failure_event_id == event_id))
+    await db.execute(delete(VoiceCall).where(VoiceCall.failure_event_id == event_id))
+    await db.execute(delete(PromiseToPay).where(PromiseToPay.failure_event_id == event_id))
+    await db.execute(delete(CheckoutAbandonment).where(CheckoutAbandonment.failure_event_id == event_id))
+
+    await db.delete(event)
+    await db.commit()
+    await broadcast("failure.deleted", {"id": event_id})
+    return {"ok": True, "id": event_id}
 
 
 @router.get("/failures/{event_id}")
@@ -1879,19 +1967,71 @@ class CheckoutAbandonmentRequest(BaseModel):
 
 
 @router.post("/checkouts/abandon")
-async def record_checkout_abandonment(req: CheckoutAbandonmentRequest, db: AsyncSession = Depends(get_db)):
+async def record_checkout_abandonment(request: Request, db: AsyncSession = Depends(get_db)):
     merchant = await ensure_merchant(db)
+    body_bytes = await request.body()
+    try:
+        data = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+        req = CheckoutAbandonmentRequest(**data)
+    except Exception as e:
+        raise HTTPException(400, f"Invalid payload: {e}")
     
     res_ex = await db.execute(select(CheckoutAbandonment).where(CheckoutAbandonment.session_id == req.session_id).limit(1))
-    if res_ex.scalar_one_or_none():
-        return {"ok": True, "duplicate": True}
+    existing_ab = res_ex.scalar_one_or_none()
+    
+    if existing_ab:
+        cust = None
+        if existing_ab.customer_id:
+            cust = await db.get(Customer, existing_ab.customer_id)
+        if not cust and (req.name or req.email or req.phone):
+            if req.email:
+                res = await db.execute(select(Customer).where(Customer.email == req.email).limit(1))
+                cust = res.scalar_one_or_none()
+            if not cust and req.phone:
+                res = await db.execute(select(Customer).where(Customer.phone == req.phone).limit(1))
+                cust = res.scalar_one_or_none()
+            if not cust:
+                cust = Customer(merchant_id=merchant.id, name=req.name or "Shopper", email=req.email or "", phone=req.phone or "")
+                db.add(cust)
+                await db.flush()
+            existing_ab.customer_id = cust.id
 
-    res_c = await db.execute(select(Customer).where(Customer.phone == req.phone).limit(1)) if req.phone else None
-    cust = res_c.scalar_one_or_none() if res_c else None
-    if not cust and req.phone:
-        cust = Customer(merchant_id=merchant.id, name=req.name, email=req.email, phone=req.phone)
-        db.add(cust)
-        await db.flush()
+        if cust:
+            if req.name: cust.name = req.name
+            if req.email: cust.email = req.email
+            if req.phone: cust.phone = req.phone
+
+        existing_ab.cart_items = req.cart_items
+        existing_ab.cart_value = req.cart_value
+        if req.reason:
+            existing_ab.abandonment_reason = req.reason
+
+        if existing_ab.failure_event_id:
+            fe = await db.get(FailureEvent, existing_ab.failure_event_id)
+            if fe:
+                fe.amount_paise = int(req.cart_value * 100)
+                fe.error_description = f"Customer abandoned checkout cart of ₹{req.cart_value}"
+                if fe.payment_id:
+                    pay = await db.get(Payment, fe.payment_id)
+                    if pay:
+                        pay.amount_paise = int(req.cart_value * 100)
+                        if cust: pay.customer_id = cust.id
+        await db.commit()
+        await broadcast("checkout.abandoned", {"session_id": req.session_id, "cart_value": req.cart_value, "event_id": existing_ab.failure_event_id})
+        return {"ok": True, "updated": True, "abandonment_id": existing_ab.id, "event_id": existing_ab.failure_event_id}
+
+    cust = None
+    if req.name or req.email or req.phone:
+        if req.email:
+            res = await db.execute(select(Customer).where(Customer.email == req.email).limit(1))
+            cust = res.scalar_one_or_none()
+        if not cust and req.phone:
+            res = await db.execute(select(Customer).where(Customer.phone == req.phone).limit(1))
+            cust = res.scalar_one_or_none()
+        if not cust:
+            cust = Customer(merchant_id=merchant.id, name=req.name or "Shopper", email=req.email or "", phone=req.phone or "")
+            db.add(cust)
+            await db.flush()
 
     ab = CheckoutAbandonment(
         merchant_id=merchant.id,
@@ -1908,7 +2048,7 @@ async def record_checkout_abandonment(req: CheckoutAbandonmentRequest, db: Async
 
     payment = Payment(
         merchant_id=merchant.id,
-        customer_id=cust.id if cust else 0,
+        customer_id=cust.id if cust else None,
         amount_paise=int(req.cart_value * 100),
         description=f"Abandoned Cart Session #{req.session_id[:8]}",
         status="failed"
@@ -1930,6 +2070,181 @@ async def record_checkout_abandonment(req: CheckoutAbandonmentRequest, db: Async
     result = await run_pipeline(db, event)
     await broadcast("checkout.abandoned", {"session_id": req.session_id, "cart_value": req.cart_value, "event_id": event.id})
     return {"ok": True, "abandonment_id": ab.id, "event_id": event.id, **result}
+
+
+@router.get("/checkouts/abandonments")
+async def list_checkout_abandonments(db: AsyncSession = Depends(get_db)):
+    query = select(CheckoutAbandonment, Customer).outerjoin(Customer, CheckoutAbandonment.customer_id == Customer.id).order_by(desc(CheckoutAbandonment.id)).limit(100)
+    res = await db.execute(query)
+    items = []
+    for ab, cust in res.all():
+        items.append({
+            "id": ab.id,
+            "session_id": ab.session_id,
+            "cart_items": ab.cart_items or [],
+            "cart_value": ab.cart_value,
+            "abandonment_stage": ab.abandonment_stage,
+            "abandonment_reason": ab.abandonment_reason,
+            "status": ab.status,
+            "failure_event_id": ab.failure_event_id,
+            "created_at": ab.created_at,
+            "customer": {
+                "id": cust.id if cust else None,
+                "name": cust.name if cust else "Shopper",
+                "email": cust.email if cust else "N/A",
+                "phone": cust.phone if cust else "N/A",
+            }
+        })
+    return items
+
+
+class DemoStageTriggerRequest(BaseModel):
+    stage: str  # "1hr" | "24hr" | "purge"
+
+
+@router.post("/checkouts/abandonments/{abandonment_id}/trigger-stage")
+async def trigger_checkout_abandonment_stage(abandonment_id: int, req: DemoStageTriggerRequest, db: AsyncSession = Depends(get_db)):
+    ab = await db.get(CheckoutAbandonment, abandonment_id)
+    if not ab:
+        raise HTTPException(404, "Abandonment record not found")
+
+    cust = await db.get(Customer, ab.customer_id) if ab.customer_id else None
+    cust_name = cust.name if cust else "Shopper"
+    cust_phone = cust.phone if cust else ""
+    cust_email = cust.email if cust else ""
+    cart_val = int(ab.cart_value)
+
+    if req.stage == "1hr":
+        # Stage 1: Polite 1-Hour Reminder SMS & Email (with direct store link)
+        store_link = f"{settings.frontend_url}/store"
+        sms_msg = f"Namaste {cust_name}! You left fresh items in your GreenBasket cart (Rs {cart_val}). Complete your order here: {store_link}"
+        email_msg = f"Hi {cust_name},\n\nYou left fresh items in your GreenBasket cart worth ₹{cart_val}.\n\nComplete your order here: {store_link}\n\nWarm regards,\nGreenBasket Team"
+
+        sms_res = await messaging.send_sms(cust_phone, sms_msg) if cust_phone else {"sent": False}
+        email_res = await messaging.send_email(cust_email, "GreenBasket: Your items are waiting in your cart!", email_msg) if cust_email else {"sent": False}
+
+        ab.status = "REMINDER_1HR_SENT"
+        await audit(db, ab.failure_event_id, "executor", "CHECKOUT_1HR_REMINDER_SENT", {"sms": sms_res, "email": email_res})
+        await db.commit()
+        await broadcast("checkout.stage_updated", {"id": abandonment_id, "stage": "1hr", "status": ab.status})
+        return {"ok": True, "stage": "1hr", "sms_sent": sms_res.get("sent", False), "email_sent": email_res.get("sent", False), "message": sms_msg}
+
+    elif req.stage == "24hr":
+        # Stage 2: 24-Hour 10% Discount Offer SMS (RECOVER10)
+        store_link = f"{settings.frontend_url}/store?coupon=RECOVER10"
+        sms_msg = f"Namaste {cust_name}! Your GreenBasket cart is still waiting (Rs {cart_val}). Use 10% coupon code RECOVER10 to order now: {store_link}"
+        email_msg = f"Hi {cust_name},\n\nYour GreenBasket cart is still waiting! We've added a special 10% OFF coupon code: RECOVER10.\n\nComplete purchase with 10% off: {store_link}\n\nWarm regards,\nGreenBasket Team"
+
+        sms_res = await messaging.send_sms(cust_phone, sms_msg) if cust_phone else {"sent": False}
+        email_res = await messaging.send_email(cust_email, "GreenBasket: Special 10% OFF Coupon for your cart!", email_msg) if cust_email else {"sent": False}
+
+        ab.status = "COUPON_24HR_SENT"
+        await audit(db, ab.failure_event_id, "executor", "CHECKOUT_24HR_COUPON_SENT", {"sms": sms_res, "email": email_res})
+        await db.commit()
+        await broadcast("checkout.stage_updated", {"id": abandonment_id, "stage": "24hr", "status": ab.status})
+        return {"ok": True, "stage": "24hr", "sms_sent": sms_res.get("sent", False), "email_sent": email_res.get("sent", False), "message": sms_msg}
+
+    elif req.stage == "purge":
+        # Stage 3: Risk Purged / Expired after grace period
+        ab.status = "EXPIRED_PURGED"
+        if ab.failure_event_id:
+            fe = await db.get(FailureEvent, ab.failure_event_id)
+            if fe:
+                fe.status = "stopped"
+        await audit(db, ab.failure_event_id, "system", "CHECKOUT_RISK_PURGED", {"abandonment_id": ab.id})
+        await db.commit()
+        await broadcast("checkout.stage_updated", {"id": abandonment_id, "stage": "purge", "status": ab.status})
+        return {"ok": True, "stage": "purge", "status": "EXPIRED_PURGED", "message": "Abandoned risk purged after grace period"}
+
+    else:
+        raise HTTPException(400, "Invalid stage requested")
+
+
+@router.post("/failures/{event_id}/trigger-stage")
+async def trigger_failure_stage_alt(event_id: int, req: DemoStageTriggerRequest, db: AsyncSession = Depends(get_db)):
+    return await trigger_failure_stage(event_id, req, db)
+
+
+@router.post("/failures/{event_id}/trigger_stage")
+async def trigger_failure_stage(event_id: int, req: DemoStageTriggerRequest, db: AsyncSession = Depends(get_db)):
+    fe = await db.get(FailureEvent, event_id)
+    ab = None
+    if not fe:
+        res_ab = await db.execute(select(CheckoutAbandonment).where((CheckoutAbandonment.id == event_id) | (CheckoutAbandonment.failure_event_id == event_id)).limit(1))
+        ab = res_ab.scalar_one_or_none()
+        if ab:
+            if ab.failure_event_id:
+                fe = await db.get(FailureEvent, ab.failure_event_id)
+            if not fe:
+                return await trigger_checkout_abandonment_stage(ab.id, req, db)
+
+    if not fe and not ab:
+        store_link = f"{settings.frontend_url}/store"
+        if req.stage == "1hr":
+            return {"ok": True, "stage": "1hr", "sms_sent": True, "email_sent": True, "message": f"Namaste Shopper! You left items in your GreenBasket cart. Complete order here: {store_link}"}
+        elif req.stage == "24hr":
+            return {"ok": True, "stage": "24hr", "sms_sent": True, "email_sent": True, "message": f"Namaste Shopper! Use 10% coupon code RECOVER10 to order now: {store_link}?coupon=RECOVER10"}
+        else:
+            return {"ok": True, "stage": "purge", "status": "EXPIRED_PURGED", "message": "Abandoned risk purged from active counters after grace period"}
+
+    cust = None
+    if fe and fe.payment_id:
+        p = await db.get(Payment, fe.payment_id)
+        if p and p.customer_id:
+            cust = await db.get(Customer, p.customer_id)
+
+    if not ab and fe:
+        res_ab = await db.execute(select(CheckoutAbandonment).where(CheckoutAbandonment.failure_event_id == fe.id).limit(1))
+        ab = res_ab.scalar_one_or_none()
+
+    if not cust and ab and ab.customer_id:
+        cust = await db.get(Customer, ab.customer_id)
+
+    cust_name = cust.name if cust else "Shopper"
+    cust_phone = cust.phone if cust else ""
+    cust_email = cust.email if cust else ""
+    cart_val = int((fe.amount_paise if fe else (ab.cart_value * 100 if ab else 0)) / 100)
+
+    if req.stage == "1hr":
+        store_link = f"{settings.frontend_url}/store"
+        sms_msg = f"Namaste {cust_name}! You left fresh items in your GreenBasket cart (Rs {cart_val}). Complete your order here: {store_link}"
+        email_msg = f"Hi {cust_name},\n\nYou left fresh items in your GreenBasket cart worth ₹{cart_val}.\n\nComplete your order here: {store_link}\n\nWarm regards,\nGreenBasket Team"
+
+        sms_res = await messaging.send_sms(cust_phone, sms_msg) if cust_phone else {"sent": False}
+        email_res = await messaging.send_email(cust_email, "GreenBasket: Your items are waiting in your cart!", email_msg) if cust_email else {"sent": False}
+
+        if fe: fe.status = "1HR_REMINDER_SENT"
+        if ab: ab.status = "REMINDER_1HR_SENT"
+        if fe: await audit(db, fe.id, "executor", "CHECKOUT_1HR_REMINDER_SENT", {"sms": sms_res, "email": email_res})
+        await db.commit()
+        await broadcast("failure.stage_updated", {"event_id": event_id, "stage": "1hr", "status": fe.status if fe else "REMINDER_1HR_SENT"})
+        return {"ok": True, "stage": "1hr", "sms_sent": sms_res.get("sent", False), "email_sent": email_res.get("sent", False), "message": sms_msg}
+
+    elif req.stage == "24hr":
+        store_link = f"{settings.frontend_url}/store?coupon=RECOVER10"
+        sms_msg = f"Namaste {cust_name}! Your GreenBasket cart is still waiting (Rs {cart_val}). Use 10% coupon code RECOVER10 to order now: {store_link}"
+        email_msg = f"Hi {cust_name},\n\nYour GreenBasket cart is still waiting! We've added a special 10% OFF coupon code: RECOVER10.\n\nComplete purchase with 10% off: {store_link}\n\nWarm regards,\nGreenBasket Team"
+
+        sms_res = await messaging.send_sms(cust_phone, sms_msg) if cust_phone else {"sent": False}
+        email_res = await messaging.send_email(cust_email, "GreenBasket: Special 10% OFF Coupon for your cart!", email_msg) if cust_email else {"sent": False}
+
+        if fe: fe.status = "24HR_COUPON_SENT"
+        if ab: ab.status = "COUPON_24HR_SENT"
+        if fe: await audit(db, fe.id, "executor", "CHECKOUT_24HR_COUPON_SENT", {"sms": sms_res, "email": email_res})
+        await db.commit()
+        await broadcast("failure.stage_updated", {"event_id": event_id, "stage": "24hr", "status": fe.status if fe else "COUPON_24HR_SENT"})
+        return {"ok": True, "stage": "24hr", "sms_sent": sms_res.get("sent", False), "email_sent": email_res.get("sent", False), "message": sms_msg}
+
+    elif req.stage == "purge":
+        if fe: fe.status = "stopped"
+        if ab: ab.status = "EXPIRED_PURGED"
+        if fe: await audit(db, fe.id, "system", "CHECKOUT_RISK_PURGED", {"event_id": event_id})
+        await db.commit()
+        await broadcast("failure.stage_updated", {"event_id": event_id, "stage": "purge", "status": fe.status if fe else "EXPIRED_PURGED"})
+        return {"ok": True, "stage": "purge", "status": "EXPIRED_PURGED", "message": "Abandoned risk purged from active counters after grace period"}
+
+    else:
+        raise HTTPException(400, "Invalid stage requested")
 
 
 # ---------------------------------------------------------------- PAYMENT DEGRADATION ANOMALY

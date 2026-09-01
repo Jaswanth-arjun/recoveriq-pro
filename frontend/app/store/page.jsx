@@ -9,10 +9,12 @@ import { FloatingBag } from "../../components/gb/FloatingBag";
 import { BagDrawer } from "../../components/gb/BagDrawer";
 import { CategoryRail, ProgressBadge } from "../../components/gb/CategoryRail";
 import { usePrefersReducedMotion, useSectionScroll } from "../../hooks/useSectionScroll";
+import { useAbandonmentTracker } from "../../hooks/useAbandonmentTracker";
 
 const TOTAL = categories.length + 2; // intro + 8 worlds + final basket
 
 export default function GreenBasketPage() {
+  useAbandonmentTracker();
   const { index, goTo } = useSectionScroll(TOTAL);
   const reduced = usePrefersReducedMotion();
 

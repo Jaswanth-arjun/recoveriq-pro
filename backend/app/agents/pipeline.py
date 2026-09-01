@@ -259,6 +259,11 @@ async def execute(db: AsyncSession, event: FailureEvent, decision: Decision) -> 
                 # Email is sent directly by Razorpay (notify: {email: true})
                 action_record.detail["email"] = {"status": "handled_by_razorpay", "to": customer.email}
 
+                # Multi-channel outreach: Twilio SMS + Email + Twilio Voice + WhatsApp
+                if customer.phone and settings.twilio_ready:
+                    sms_res = await messaging.send_sms(customer.phone, msg)
+                    action_record.detail["twilio_sms"] = sms_res
+
                 # Phone Call via Twilio
                 if customer.phone and settings.twilio_ready:
                     twilio_call = await voice_service.make_twilio_call(

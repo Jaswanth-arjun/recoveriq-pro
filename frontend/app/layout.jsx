@@ -43,9 +43,8 @@ export default function RootLayout({ children }) {
       <body className="bg-[#0a0e17] text-slate-200 min-h-screen antialiased" suppressHydrationWarning>
         <div className="flex min-h-screen">
           <aside
-            className={`${
-              open ? "block" : "hidden"
-            } md:block fixed md:sticky top-0 h-screen z-40 w-56 shrink-0 bg-[#111827] border-r border-slate-800 p-4 overflow-y-auto`}
+            className={`${open ? "block" : "hidden"
+              } md:block fixed md:sticky top-0 h-screen z-40 w-56 shrink-0 bg-[#111827] border-r border-slate-800 p-4 overflow-y-auto`}
           >
             <Link href="/" className="block mb-6">
               <div className="text-lg font-bold text-white tracking-tight">
@@ -71,11 +70,10 @@ export default function RootLayout({ children }) {
                     key={item.href}
                     href={item.href}
                     onClick={() => setOpen(false)}
-                    className={`block px-3 py-2 rounded-lg text-sm transition-colors ${
-                      active
-                        ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
-                        : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent"
-                    }`}
+                    className={`block px-3 py-2 rounded-lg text-sm transition-colors ${active
+                      ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+                      : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent"
+                      }`}
                   >
                     {item.label}
                   </Link>
@@ -110,9 +108,8 @@ export default function RootLayout({ children }) {
                 </Link>
                 <div className="flex items-center gap-2 text-xs text-slate-400">
                   <span
-                    className={`inline-block w-2.5 h-2.5 rounded-full ${
-                      connected ? "bg-emerald-400" : "bg-rose-500"
-                    }`}
+                    className={`inline-block w-2.5 h-2.5 rounded-full ${connected ? "bg-emerald-400" : "bg-rose-500"
+                      }`}
                   />
                   <span className="hidden sm:inline">
                     {connected ? "WS Connected" : "WS Disconnected"}

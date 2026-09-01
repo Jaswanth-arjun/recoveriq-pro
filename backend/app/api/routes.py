@@ -127,6 +127,68 @@ async def auth_google(req: GoogleAuthRequest, db: AsyncSession = Depends(get_db)
     return {"ok": True, "user": profile}
 
 
+class EmailAuthRequest(BaseModel):
+    email: str
+    name: str | None = None
+    password: str | None = None
+    action: str = "signin"  # "signin" or "signup"
+
+
+@router.post("/auth/email")
+async def auth_email(req: EmailAuthRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Handle real-time Sign In & Sign Up with email and optional profile details.
+    Persists customer record in the database for autonomous outreach & checkout recovery.
+    """
+    if not req.email or "@" not in req.email:
+        raise HTTPException(400, "Valid email address is required")
+
+    email = req.email.strip().lower()
+    merchant = await ensure_merchant(db)
+
+    res_c = await db.execute(select(Customer).where(Customer.email == email).limit(1))
+    cust = res_c.scalar_one_or_none()
+
+    if req.action == "signup":
+        if cust:
+            # Customer exists, update name if provided
+            if req.name and req.name.strip():
+                cust.name = req.name.strip()
+        else:
+            name = (req.name or email.split("@")[0].replace(".", " ").replace("_", " ")).title()
+            cust = Customer(merchant_id=merchant.id, name=name, email=email, phone="")
+            db.add(cust)
+        await db.commit()
+        await db.refresh(cust)
+    else:
+        # Sign-in
+        if not cust:
+            name = (req.name or email.split("@")[0].replace(".", " ").replace("_", " ")).title()
+            cust = Customer(merchant_id=merchant.id, name=name, email=email, phone="")
+            db.add(cust)
+            await db.commit()
+            await db.refresh(cust)
+
+    name = cust.name if cust else (req.name or email.split("@")[0].title())
+    profile = {
+        "id": f"usr_{cust.id if cust else int(time.time())}",
+        "email": email,
+        "name": name,
+        "avatar": f"https://api.dicebear.com/7.x/avataaars/svg?seed={encode_seed(email)}",
+        "googleVerified": False,
+        "authProvider": "email",
+    }
+
+    await audit(db, None, "system", f"EMAIL_{req.action.upper()}", {"email": email, "name": name})
+    return {"ok": True, "user": profile}
+
+
+def encode_seed(s: str) -> str:
+    import urllib.parse
+    return urllib.parse.quote(s)
+
+
+
 # ---------------------------------------------------------------- WEBHOOKS (production)
 
 

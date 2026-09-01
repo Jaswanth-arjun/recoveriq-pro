@@ -12,7 +12,14 @@ export function useAuthSession() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        setUser(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        // Legacy demo sessions (saved before real Google OAuth) are NOT valid
+        // sign-ins — discard them so users must go through real Google auth.
+        if (parsed?.googleVerified) {
+          setUser(parsed);
+        } else {
+          localStorage.removeItem(STORAGE_KEY);
+        }
       }
     } catch (err) {
       console.error("Failed to load auth session:", err);

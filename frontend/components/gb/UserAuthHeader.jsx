@@ -16,7 +16,6 @@ export function UserAuthHeader({ user, onLogout, onSignInClick }) {
             {user.name}
             <Sparkles className="size-3 text-amber-400" />
           </p>
-          <p className="text-[10px] text-slate-300 font-medium leading-none">{user.email}</p>
         </div>
         <button
           type="button"

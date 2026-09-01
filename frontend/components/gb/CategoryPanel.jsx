@@ -101,10 +101,7 @@ export function CategoryPanel({ category, position, active }) {
 
       <div className="glass-panel relative z-20 flex max-h-[85vh] w-full max-w-6xl flex-col overflow-hidden rounded-[28px] shadow-2xl border border-white/70 bg-white/75 backdrop-blur-xl transition-all duration-300">
         <header className="shrink-0 border-b border-white/40 bg-white/40 px-6 pb-4 pt-6 text-center sm:px-10">
-          <div className="flex items-center justify-between">
-            <span className="rounded-full bg-black/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.25em] text-muted-foreground backdrop-blur-md">
-              {position}
-            </span>
+          <div className="flex items-center justify-end">
             <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/60 bg-emerald-100/80 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-900 shadow-sm backdrop-blur-md">
               <Sparkles className="size-3 text-emerald-600 animate-pulse" />
               <span>Direct Organic Harvest</span>

@@ -19,6 +19,7 @@ from app.agents import pipeline
 from app.agents.pipeline import run_pipeline, mark_recovered, audit
 from app.services import llm as llm_service
 from app.services import razorpay as rzp
+from app.services import voice as voice_service
 from app.services.messaging import send_email, send_whatsapp, send_sms
 from app.services.events import connect, disconnect, broadcast
 from app.worker import schedule_retry
@@ -1479,7 +1480,7 @@ RecoverIQ Pro Revenue Recovery
             msg = f"Stage 6 Triggered: Promise Date set to {p_dt.strftime('%b %d, %Y')}. Confirmation Email & SMS sent to {cust_email} / {cust_phone} (Email: {email_res.get('sent', False)}, SMS: {sms_res.get('sent', False)})"
             await audit(db, None, "system", "PROMISE_CREATED", {"invoice_id": inv.id, "promised_date": p_dt.strftime("%Y-%m-%d"), "email_sent": email_res.get("sent"), "sms_sent": sms_res.get("sent")})
         else:
-            p2p_link = f"http://localhost:3001/p2p/{inv.id}"
+            p2p_link = f"{settings.frontend_url}/p2p/{inv.id}"
             subject = f"[Action Needed] Confirm Expected Payment Date for Invoice #{inv.invoice_number}"
             body = f"""Hi {cust_name},
 
@@ -1507,20 +1508,49 @@ Accounts Receivable — RecoverIQ Pro
         inv.escalation_level = 4
         inv.reminder_count += 1
         inv.last_reminder_at = now
+
+        voice_lang = cust.language if cust and cust.language else "te"
+        voice_script = f"Namaste {cust_name} gaaru, this is an urgent credit recovery call from RecoverIQ Pro. Your B2B Invoice #{inv.invoice_number} for ₹{inv.outstanding_amount:,.2f} is now 8 days overdue. Please process payment immediately using the payment link sent to your email and phone: {payment_link}. Thank you."
+
+        v_res = await voice_service.generate_voice(voice_script, voice_lang)
+        tw_res = await voice_service.make_twilio_call(cust_phone, voice_script, voice_lang) if cust_phone else {"called": False}
+
+        vc = VoiceCall(
+            failure_event_id=None,
+            script=voice_script,
+            language=voice_lang,
+            audio_base64=v_res.get("audio_base64", ""),
+            simulated=v_res.get("engine") == "not_configured"
+        )
+        db.add(vc)
+        await db.flush()
+
         subject = f"[CRITICAL ESCALATION] Urgent Payment Required for Invoice #{inv.invoice_number}"
         body = f"""Hi {cust_name},
 
 Invoice #{inv.invoice_number} (₹{inv.outstanding_amount:,.2f}) is 8+ days overdue and has been escalated to Tier 4 High-Priority Recovery.
 
-Our AI Voice agent is attempting follow-up calls. Please resolve this immediately:
+Our AI Voice agent is attempting follow-up calls to {cust_phone}. Please resolve this immediately:
 {payment_link}
+
+Voice Call Script:
+"{voice_script}"
 
 Best regards,
 Executive Credit Control — RecoverIQ Pro
 """
         email_res = await send_email(cust_email, subject, body)
-        msg = f"Stage 7 Triggered: 8+ Days Overdue Voice Call & Critical Email sent to {cust_email} (Sent: {email_res.get('sent', False)})"
-        await audit(db, None, "executor", "VOICE_FOLLOWUP_INITIATED", {"invoice_id": inv.id, "email_sent": email_res.get("sent")})
+        call_status = "Twilio Call Placed" if tw_res.get("called") else ("Audio Generated" if v_res.get("audio_base64") else "AI Voice Call Initiated")
+        msg = f"Stage 7 Triggered: 8+ Days Overdue AI Voice Call ({call_status}) to {cust_phone} & Critical Email sent to {cust_email} (Sent: {email_res.get('sent', False)})"
+        await audit(db, None, "executor", "VOICE_FOLLOWUP_INITIATED", {
+            "invoice_id": inv.id,
+            "phone": cust_phone,
+            "call_sid": tw_res.get("call_sid", ""),
+            "voice_call_id": vc.id,
+            "script": voice_script,
+            "email_sent": email_res.get("sent")
+        })
+        await broadcast("call.generated", {"id": vc.id, "customer": cust_name, "phone": cust_phone, "invoice": inv.invoice_number})
 
     else:
         raise HTTPException(400, f"Unknown simulation stage: {stage}")

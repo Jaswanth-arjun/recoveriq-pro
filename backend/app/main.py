@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.db import engine, Base
+import app.models
 from app.api.routes import router
 
 
@@ -19,17 +20,21 @@ async def lifespan(app: FastAPI):
     configure_logging()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        from sqlalchemy import text
-        for col in ["address_line", "city", "pincode", "landmark"]:
-            try:
-                await conn.execute(text(f"ALTER TABLE customers ADD COLUMN {col} VARCHAR(300) DEFAULT ''"))
-            except Exception:
-                pass
-        for tbl in ["subscriptions", "one_time_orders"]:
-            try:
-                await conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN items_detail JSON DEFAULT '[]'"))
-            except Exception:
-                pass
+
+    from sqlalchemy import text
+    for col in ["address_line", "city", "pincode", "landmark"]:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"ALTER TABLE customers ADD COLUMN IF NOT EXISTS {col} VARCHAR(300) DEFAULT ''"))
+        except Exception:
+            pass
+
+    for tbl in ["subscriptions", "one_time_orders"]:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS items_detail JSON DEFAULT '[]'"))
+        except Exception:
+            pass
 
     # Start background task loop
     async def bg_loop():
@@ -53,13 +58,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
-if "*" not in origins:
-    origins.extend(["http://localhost:3001", "http://localhost:3000", "http://127.0.0.1:3000", "http://127.0.0.1:3001", "*"])
+origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip() and o.strip() != "*"]
+if not origins:
+    origins = ["http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000", "http://127.0.0.1:3001"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
+    allow_origin_regex=r"https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

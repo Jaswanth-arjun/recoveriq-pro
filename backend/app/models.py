@@ -180,7 +180,7 @@ class AuditLog(Base):
 class VoiceCall(Base):
     __tablename__ = "voice_calls"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    failure_event_id: Mapped[int] = mapped_column(ForeignKey("failure_events.id"))
+    failure_event_id: Mapped[int | None] = mapped_column(ForeignKey("failure_events.id"), nullable=True)
     script: Mapped[str] = mapped_column(Text, default="")
     language: Mapped[str] = mapped_column(String(10), default="te")
     audio_base64: Mapped[str] = mapped_column(Text, default="")  # real TTS audio

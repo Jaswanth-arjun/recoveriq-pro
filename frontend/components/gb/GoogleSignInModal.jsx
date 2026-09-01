@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, ShieldCheck, CheckCircle2, ArrowRight, UserCheck, X } from "lucide-react";
+import { Sparkles, ShieldCheck, CheckCircle2, ArrowRight, X } from "lucide-react";
 
 export function GoogleSignInModal({ isOpen, onLogin, onClose }) {
   const [customEmail, setCustomEmail] = useState("");
@@ -31,20 +31,20 @@ export function GoogleSignInModal({ isOpen, onLogin, onClose }) {
 
   return (
     <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-300">
-      {/* Heavy White Blur Backdrop */}
+      {/* Translucent Glassmorphism Frosted Backdrop - 3D Scene stays softly visible */}
       <div 
-        className="fixed inset-0 z-0 bg-white/80 backdrop-blur-3xl transition-all duration-500"
+        className="fixed inset-0 z-0 bg-slate-950/40 backdrop-blur-xl backdrop-saturate-150 transition-all duration-500"
         aria-hidden="true"
       />
 
-      {/* Modal Card */}
-      <div className="relative z-10 w-full max-w-md transform overflow-hidden rounded-3xl bg-white/95 p-6 sm:p-8 text-left shadow-[0_20px_70px_rgba(0,0,0,0.18)] border border-slate-200/90 backdrop-blur-md transition-all duration-300">
+      {/* Glassmorphism Frosted Modal Card */}
+      <div className="relative z-10 w-full max-w-md transform overflow-hidden rounded-3xl bg-white/85 p-6 sm:p-8 text-left shadow-[0_30px_90px_rgba(0,0,0,0.4)] border border-white/80 backdrop-blur-2xl backdrop-saturate-150 transition-all duration-300">
         
         {/* Close / Dismiss button (Returns user to top of intro) */}
         {onClose && (
           <button
             onClick={onClose}
-            className="absolute top-5 right-5 rounded-full p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
+            className="absolute top-5 right-5 rounded-full p-2 text-slate-500 hover:bg-white/80 hover:text-slate-800 transition-colors cursor-pointer"
             title="Back to home"
           >
             <X className="size-5" />
@@ -53,7 +53,7 @@ export function GoogleSignInModal({ isOpen, onLogin, onClose }) {
 
         {/* Header Branding */}
         <div className="flex flex-col items-center text-center">
-          <div className="flex size-14 items-center justify-center rounded-2xl bg-slate-50 border border-slate-200/80 shadow-sm mb-4">
+          <div className="flex size-14 items-center justify-center rounded-2xl bg-white/90 border border-slate-200/80 shadow-md mb-4 backdrop-blur-md">
             {/* Google Multicolor SVG Logo */}
             <svg className="size-7" viewBox="0 0 24 24">
               <path
@@ -75,16 +75,16 @@ export function GoogleSignInModal({ isOpen, onLogin, onClose }) {
             </svg>
           </div>
 
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100/80 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-emerald-800 border border-emerald-200">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-emerald-900 border border-emerald-500/30 backdrop-blur-md">
             <Sparkles className="size-3 text-emerald-600 animate-pulse" />
-            Account Required to Explore Store
+            Sign In Required to Explore Store
           </span>
 
-          <h2 className="mt-3 text-2xl font-extrabold text-slate-900 tracking-tight">
+          <h2 className="mt-3 text-2xl font-black text-slate-900 tracking-tight">
             Sign in to GreenBasket
           </h2>
-          <p className="mt-1.5 text-xs text-slate-600 leading-relaxed max-w-xs">
-            Sign in with Google to scroll through 8 organic farm worlds, build custom baskets & manage daily morning deliveries.
+          <p className="mt-1.5 text-xs font-semibold text-slate-700 leading-relaxed max-w-xs">
+            Continue with Google to scroll 8 organic farm worlds, build custom baskets & manage daily deliveries.
           </p>
         </div>
 
@@ -94,22 +94,22 @@ export function GoogleSignInModal({ isOpen, onLogin, onClose }) {
           <button
             type="button"
             onClick={() => handleQuickLogin("jaswanth.arjun@gmail.com", "Jaswanth Arjun")}
-            className="group relative flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm transition-all duration-200 hover:border-emerald-500 hover:bg-emerald-50/50 hover:shadow-md cursor-pointer"
+            className="group relative flex w-full items-center justify-between rounded-2xl border border-slate-200/90 bg-white/90 p-3.5 shadow-sm transition-all duration-200 hover:border-emerald-500 hover:bg-emerald-50/80 hover:shadow-md cursor-pointer backdrop-blur-md"
           >
             <div className="flex items-center gap-3">
               <img
                 src="https://api.dicebear.com/7.x/avataaars/svg?seed=Jaswanth"
                 alt="Jaswanth Arjun"
-                className="size-10 rounded-full border border-emerald-400 bg-slate-100"
+                className="size-10 rounded-full border border-emerald-500/60 bg-slate-100 object-cover shadow-sm"
               />
               <div className="text-left">
                 <p className="text-sm font-bold text-slate-900 group-hover:text-emerald-900">
                   Jaswanth Arjun
                 </p>
-                <p className="text-xs text-slate-500 font-medium">jaswanth.arjun@gmail.com</p>
+                <p className="text-xs text-slate-600 font-medium">jaswanth.arjun@gmail.com</p>
               </div>
             </div>
-            <span className="flex items-center gap-1 text-xs font-bold text-emerald-600 opacity-90 group-hover:opacity-100">
+            <span className="flex items-center gap-1 text-xs font-bold text-emerald-700 opacity-90 group-hover:opacity-100">
               Continue <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
             </span>
           </button>
@@ -117,22 +117,22 @@ export function GoogleSignInModal({ isOpen, onLogin, onClose }) {
           <button
             type="button"
             onClick={() => handleQuickLogin("customer@greenbasket.in", "GreenBasket Customer")}
-            className="group relative flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm transition-all duration-200 hover:border-emerald-500 hover:bg-emerald-50/50 hover:shadow-md cursor-pointer"
+            className="group relative flex w-full items-center justify-between rounded-2xl border border-slate-200/90 bg-white/90 p-3.5 shadow-sm transition-all duration-200 hover:border-emerald-500 hover:bg-emerald-50/80 hover:shadow-md cursor-pointer backdrop-blur-md"
           >
             <div className="flex items-center gap-3">
               <img
                 src="https://api.dicebear.com/7.x/avataaars/svg?seed=GreenBasket"
                 alt="Customer"
-                className="size-10 rounded-full border border-slate-300 bg-slate-100"
+                className="size-10 rounded-full border border-slate-300 bg-slate-100 object-cover shadow-sm"
               />
               <div className="text-left">
                 <p className="text-sm font-bold text-slate-900 group-hover:text-emerald-900">
                   GreenBasket Customer
                 </p>
-                <p className="text-xs text-slate-500 font-medium">customer@greenbasket.in</p>
+                <p className="text-xs text-slate-600 font-medium">customer@greenbasket.in</p>
               </div>
             </div>
-            <span className="flex items-center gap-1 text-xs font-bold text-emerald-600 opacity-90 group-hover:opacity-100">
+            <span className="flex items-center gap-1 text-xs font-bold text-emerald-700 opacity-90 group-hover:opacity-100">
               Continue <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
             </span>
           </button>
@@ -142,13 +142,13 @@ export function GoogleSignInModal({ isOpen, onLogin, onClose }) {
             <button
               type="button"
               onClick={() => setShowInput(true)}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 py-3 text-xs font-semibold text-slate-600 hover:border-slate-400 hover:bg-slate-50 transition-colors cursor-pointer"
+              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300/90 bg-white/50 py-3 text-xs font-bold text-slate-700 hover:border-emerald-500 hover:bg-white/80 transition-all cursor-pointer backdrop-blur-md"
             >
               <span>+ Use another Google account</span>
             </button>
           ) : (
             <form onSubmit={handleCustomSubmit} className="space-y-2 pt-1">
-              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600">
                 Enter Google Email
               </label>
               <div className="flex gap-2">
@@ -158,11 +158,11 @@ export function GoogleSignInModal({ isOpen, onLogin, onClose }) {
                   placeholder="yourname@gmail.com"
                   value={customEmail}
                   onChange={(e) => setCustomEmail(e.target.value)}
-                  className="flex-1 rounded-xl border border-slate-300 px-3.5 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                  className="flex-1 rounded-xl border border-slate-300 bg-white/90 px-3.5 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                 />
                 <button
                   type="submit"
-                  className="rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 transition-colors"
+                  className="rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 transition-colors shadow-md"
                 >
                   Sign In
                 </button>
@@ -172,24 +172,24 @@ export function GoogleSignInModal({ isOpen, onLogin, onClose }) {
         </div>
 
         {/* Feature benefits list */}
-        <div className="mt-6 rounded-2xl bg-slate-50/80 border border-slate-200/60 p-3.5 text-[11px] text-slate-600 space-y-1.5">
-          <div className="flex items-center gap-2 font-medium text-slate-700">
-            <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
+        <div className="mt-6 rounded-2xl bg-white/60 border border-white/80 p-3.5 text-[11px] text-slate-700 space-y-1.5 backdrop-blur-md shadow-inner">
+          <div className="flex items-center gap-2 font-bold text-slate-800">
+            <CheckCircle2 className="size-4 text-emerald-600 shrink-0" />
             <span>Instant access to 8 interactive 3D farm worlds</span>
           </div>
-          <div className="flex items-center gap-2 font-medium text-slate-700">
-            <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
+          <div className="flex items-center gap-2 font-bold text-slate-800">
+            <CheckCircle2 className="size-4 text-emerald-600 shrink-0" />
             <span>Automatic 6 AM Sunrise Delivery booking</span>
           </div>
-          <div className="flex items-center gap-2 font-medium text-slate-700">
-            <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
+          <div className="flex items-center gap-2 font-bold text-slate-800">
+            <CheckCircle2 className="size-4 text-emerald-600 shrink-0" />
             <span>One-click pause/cancel subscription controls</span>
           </div>
         </div>
 
         {/* Footer info */}
-        <div className="mt-5 flex items-center justify-center gap-1.5 text-[10px] text-slate-400 font-medium">
-          <ShieldCheck className="size-3.5 text-slate-400" />
+        <div className="mt-5 flex items-center justify-center gap-1.5 text-[10px] text-slate-500 font-semibold">
+          <ShieldCheck className="size-3.5 text-slate-500" />
           <span>Protected by Google OAuth • Secure SSL Connection</span>
         </div>
       </div>

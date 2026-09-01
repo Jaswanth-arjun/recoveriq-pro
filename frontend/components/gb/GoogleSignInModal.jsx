@@ -30,10 +30,10 @@ export function GoogleSignInModal({ isOpen, onLogin, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-300">
+    <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-300">
       {/* Heavy White Blur Backdrop */}
       <div 
-        className="fixed inset-0 bg-white/75 backdrop-blur-2xl transition-all duration-500"
+        className="fixed inset-0 z-0 bg-white/80 backdrop-blur-3xl transition-all duration-500"
         aria-hidden="true"
       />
 

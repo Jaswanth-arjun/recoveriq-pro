@@ -19,19 +19,30 @@ const TOTAL = categories.length + 2; // intro + 8 worlds + final basket
 
 export default function GreenBasketPage() {
   useAbandonmentTracker();
-  const { index, goTo } = useSectionScroll(TOTAL);
-  const reduced = usePrefersReducedMotion();
   const { user, isLoggedIn, loginWithGoogle, logout } = useAuthSession();
 
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [pendingIndex, setPendingIndex] = useState(1);
+
+  // Strict scroll interception callback for unauthenticated users
+  const handleBeforeChange = (next, current) => {
+    if (!isLoggedIn && next > 0) {
+      setPendingIndex(next);
+      setShowAuthModal(true);
+      return false; // Blocks the scroll transition!
+    }
+    return true;
+  };
+
+  const { index, goTo } = useSectionScroll(TOTAL, { onBeforeChange: handleBeforeChange });
+  const reduced = usePrefersReducedMotion();
 
   const isIntro = index === 0;
   const isFinal = index === TOTAL - 1;
   const categoryIndex = Math.min(Math.max(index - 1, 0), categories.length - 1);
   const activeCategory = isIntro ? -1 : isFinal ? categories.length : categoryIndex;
 
-  // Intercept section changes for unauthenticated users
+  // Intercept explicit start / category rail button clicks
   const handleGoTo = (next) => {
     if (!isLoggedIn && next > 0) {
       setPendingIndex(next);
@@ -41,7 +52,7 @@ export default function GreenBasketPage() {
     goTo(next);
   };
 
-  // If user scrolls down past intro while unauthenticated, trigger white blur overlay
+  // If user is unauthenticated and somehow on index > 0, enforce white blur modal
   useEffect(() => {
     if (!isLoggedIn && index > 0) {
       setShowAuthModal(true);

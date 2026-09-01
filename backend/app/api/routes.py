@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, func, desc
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -1966,6 +1967,50 @@ class CheckoutAbandonmentRequest(BaseModel):
     reason: str = "inactivity_or_exit"
 
 
+async def _update_existing_abandonment(db: AsyncSession, merchant: Merchant, ab: CheckoutAbandonment, req: CheckoutAbandonmentRequest):
+    """Update an already-recorded abandonment (same session or same customer)
+    instead of creating a duplicate failure event."""
+    cust = None
+    if ab.customer_id:
+        cust = await db.get(Customer, ab.customer_id)
+    if not cust and (req.name or req.email or req.phone):
+        if req.email:
+            res = await db.execute(select(Customer).where(Customer.email == req.email).limit(1))
+            cust = res.scalar_one_or_none()
+        if not cust and req.phone:
+            res = await db.execute(select(Customer).where(Customer.phone == req.phone).limit(1))
+            cust = res.scalar_one_or_none()
+        if not cust:
+            cust = Customer(merchant_id=merchant.id, name=req.name or "Shopper", email=req.email or "", phone=req.phone or "")
+            db.add(cust)
+            await db.flush()
+        ab.customer_id = cust.id
+
+    if cust:
+        if req.name: cust.name = req.name
+        if req.email: cust.email = req.email
+        if req.phone: cust.phone = req.phone
+
+    ab.cart_items = req.cart_items
+    ab.cart_value = req.cart_value
+    if req.reason:
+        ab.abandonment_reason = req.reason
+
+    if ab.failure_event_id:
+        fe = await db.get(FailureEvent, ab.failure_event_id)
+        if fe:
+            fe.amount_paise = int(req.cart_value * 100)
+            fe.error_description = f"Customer abandoned checkout cart of ₹{req.cart_value}"
+            if fe.payment_id:
+                pay = await db.get(Payment, fe.payment_id)
+                if pay:
+                    pay.amount_paise = int(req.cart_value * 100)
+                    if cust: pay.customer_id = cust.id
+    await db.commit()
+    await broadcast("checkout.abandoned", {"session_id": req.session_id, "cart_value": req.cart_value, "event_id": ab.failure_event_id})
+    return {"ok": True, "updated": True, "abandonment_id": ab.id, "event_id": ab.failure_event_id}
+
+
 @router.post("/checkouts/abandon")
 async def record_checkout_abandonment(request: Request, db: AsyncSession = Depends(get_db)):
     merchant = await ensure_merchant(db)
@@ -2000,45 +2045,7 @@ async def record_checkout_abandonment(request: Request, db: AsyncSession = Depen
             existing_ab = res_open.scalar_one_or_none()
     
     if existing_ab:
-        cust = None
-        if existing_ab.customer_id:
-            cust = await db.get(Customer, existing_ab.customer_id)
-        if not cust and (req.name or req.email or req.phone):
-            if req.email:
-                res = await db.execute(select(Customer).where(Customer.email == req.email).limit(1))
-                cust = res.scalar_one_or_none()
-            if not cust and req.phone:
-                res = await db.execute(select(Customer).where(Customer.phone == req.phone).limit(1))
-                cust = res.scalar_one_or_none()
-            if not cust:
-                cust = Customer(merchant_id=merchant.id, name=req.name or "Shopper", email=req.email or "", phone=req.phone or "")
-                db.add(cust)
-                await db.flush()
-            existing_ab.customer_id = cust.id
-
-        if cust:
-            if req.name: cust.name = req.name
-            if req.email: cust.email = req.email
-            if req.phone: cust.phone = req.phone
-
-        existing_ab.cart_items = req.cart_items
-        existing_ab.cart_value = req.cart_value
-        if req.reason:
-            existing_ab.abandonment_reason = req.reason
-
-        if existing_ab.failure_event_id:
-            fe = await db.get(FailureEvent, existing_ab.failure_event_id)
-            if fe:
-                fe.amount_paise = int(req.cart_value * 100)
-                fe.error_description = f"Customer abandoned checkout cart of ₹{req.cart_value}"
-                if fe.payment_id:
-                    pay = await db.get(Payment, fe.payment_id)
-                    if pay:
-                        pay.amount_paise = int(req.cart_value * 100)
-                        if cust: pay.customer_id = cust.id
-        await db.commit()
-        await broadcast("checkout.abandoned", {"session_id": req.session_id, "cart_value": req.cart_value, "event_id": existing_ab.failure_event_id})
-        return {"ok": True, "updated": True, "abandonment_id": existing_ab.id, "event_id": existing_ab.failure_event_id}
+        return await _update_existing_abandonment(db, merchant, existing_ab, req)
 
     cust = None
     if req.name or req.email or req.phone:
@@ -2064,7 +2071,17 @@ async def record_checkout_abandonment(request: Request, db: AsyncSession = Depen
         status="ABANDONED"
     )
     db.add(ab)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # Lost a race with a concurrent double-post of the same session —
+        # the unique index guarantees a single record; update it instead.
+        await db.rollback()
+        res_ex = await db.execute(select(CheckoutAbandonment).where(CheckoutAbandonment.session_id == req.session_id).limit(1))
+        raced_ab = res_ex.scalar_one_or_none()
+        if raced_ab:
+            return await _update_existing_abandonment(db, merchant, raced_ab, req)
+        raise HTTPException(409, "Concurrent abandonment conflict")
 
     payment = Payment(
         merchant_id=merchant.id,

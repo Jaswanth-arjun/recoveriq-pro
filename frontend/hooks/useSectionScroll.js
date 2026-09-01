@@ -4,7 +4,8 @@ const LOCK_MS = 850;
 const EDGE_DWELL_MS = 120;
 const WHEEL_THRESHOLD = 45;
 
-export function useSectionScroll(total) {
+export function useSectionScroll(total, options = {}) {
+  const { onBeforeChange } = options;
   const [index, setIndex] = useState(0);
   const [direction, setDirection] = useState(1);
   const locked = useRef(false);
@@ -12,11 +13,25 @@ export function useSectionScroll(total) {
   const edgeSince = useRef(0);
   const touchStart = useRef(0);
 
+  const onBeforeRef = useRef(onBeforeChange);
+  useEffect(() => {
+    onBeforeRef.current = onBeforeChange;
+  }, [onBeforeChange]);
+
   const goTo = useCallback(
     (next) => {
       const clamped = Math.max(0, Math.min(total - 1, next));
       setIndex((current) => {
         if (clamped === current) return current;
+
+        // Check if onBeforeChange blocks this transition
+        if (onBeforeRef.current) {
+          const allowed = onBeforeRef.current(clamped, current);
+          if (allowed === false) {
+            return current;
+          }
+        }
+
         setDirection(clamped > current ? 1 : -1);
         locked.current = true;
         accum.current = 0;
@@ -63,6 +78,15 @@ export function useSectionScroll(total) {
         setIndex((current) => {
           const next = Math.max(0, Math.min(total - 1, current + dir));
           if (next === current) return current;
+
+          // Check onBeforeChange callback
+          if (onBeforeRef.current) {
+            const allowed = onBeforeRef.current(next, current);
+            if (allowed === false) {
+              return current;
+            }
+          }
+
           setDirection(dir);
           locked.current = true;
           window.setTimeout(() => {
@@ -83,29 +107,47 @@ export function useSectionScroll(total) {
         e.preventDefault();
         setIndex((c) => {
           if (c >= total - 1) return c;
+          const next = c + 1;
+          if (onBeforeRef.current) {
+            const allowed = onBeforeRef.current(next, c);
+            if (allowed === false) return c;
+          }
           setDirection(1);
           locked.current = true;
           window.setTimeout(() => {
             locked.current = false;
           }, LOCK_MS);
-          return c + 1;
+          return next;
         });
       } else if (["ArrowUp", "PageUp"].includes(e.key)) {
         if (innerConsumes(e.target, -1)) return;
         e.preventDefault();
         setIndex((c) => {
           if (c <= 0) return c;
+          const next = c - 1;
+          if (onBeforeRef.current) {
+            const allowed = onBeforeRef.current(next, c);
+            if (allowed === false) return c;
+          }
           setDirection(-1);
           locked.current = true;
           window.setTimeout(() => {
             locked.current = false;
           }, LOCK_MS);
-          return c - 1;
+          return next;
         });
       } else if (e.key === "Home") {
+        if (onBeforeRef.current) {
+          const allowed = onBeforeRef.current(0, index);
+          if (allowed === false) return;
+        }
         setDirection(-1);
         setIndex(0);
       } else if (e.key === "End") {
+        if (onBeforeRef.current) {
+          const allowed = onBeforeRef.current(total - 1, index);
+          if (allowed === false) return;
+        }
         setDirection(1);
         setIndex(total - 1);
       }
@@ -127,6 +169,12 @@ export function useSectionScroll(total) {
         const dir = delta > 0 ? 1 : -1;
         const next = Math.max(0, Math.min(total - 1, current + dir));
         if (next === current) return current;
+
+        if (onBeforeRef.current) {
+          const allowed = onBeforeRef.current(next, current);
+          if (allowed === false) return current;
+        }
+
         setDirection(dir);
         locked.current = true;
         window.setTimeout(() => {
@@ -147,7 +195,7 @@ export function useSectionScroll(total) {
       window.removeEventListener("touchstart", onTouchStart);
       window.removeEventListener("touchmove", onTouchMove);
     };
-  }, [total]);
+  }, [total, index]);
 
   return { index, direction, goTo };
 }

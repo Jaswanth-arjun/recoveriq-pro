@@ -59,6 +59,74 @@ async def health():
     return {"status": "ok", **channels}
 
 
+# ---------------------------------------------------------------- auth (Google Sign-In)
+
+
+class GoogleAuthRequest(BaseModel):
+    credential: str
+
+
+@router.post("/auth/google")
+async def auth_google(req: GoogleAuthRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Verify a Google Identity Services ID token (JWT) issued by the official
+    'Continue with Google' button and return the verified user profile.
+    """
+    import httpx
+    if not req.credential:
+        raise HTTPException(400, "credential required")
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(
+                "https://oauth2.googleapis.com/tokeninfo",
+                params={"id_token": req.credential},
+            )
+    except Exception:
+        raise HTTPException(502, "Could not reach Google token verifier")
+
+    if res.status_code != 200:
+        raise HTTPException(401, "Invalid Google credential")
+
+    info = res.json()
+    if info.get("iss") not in ("accounts.google.com", "https://accounts.google.com"):
+        raise HTTPException(401, "Invalid token issuer")
+    if settings.google_client_id and info.get("aud") != settings.google_client_id:
+        raise HTTPException(401, "Google token audience mismatch")
+    try:
+        if int(info.get("exp", 0)) < int(time.time()):
+            raise HTTPException(401, "Google token expired")
+    except ValueError:
+        raise HTTPException(401, "Malformed Google token")
+    if str(info.get("email_verified", "false")).lower() != "true":
+        raise HTTPException(401, "Google email not verified")
+
+    email = info.get("email", "")
+    name = info.get("name") or (email.split("@")[0].replace(".", " ").title() if email else "Google User")
+    profile = {
+        "id": info.get("sub", ""),
+        "email": email,
+        "name": name,
+        "picture": info.get("picture", ""),
+        "googleVerified": True,
+    }
+
+    # Register / refresh the verified shopper so outreach & recovery flows
+    # use their real Google email.
+    merchant = await ensure_merchant(db)
+    if email:
+        res_c = await db.execute(select(Customer).where(Customer.email == email).limit(1))
+        cust = res_c.scalar_one_or_none()
+        if not cust:
+            db.add(Customer(merchant_id=merchant.id, name=name, email=email, phone=""))
+        else:
+            cust.name = name
+        await db.commit()
+
+    await audit(db, None, "system", "GOOGLE_SIGNIN", {"email": email, "name": name})
+    return {"ok": True, "user": profile}
+
+
 # ---------------------------------------------------------------- WEBHOOKS (production)
 
 

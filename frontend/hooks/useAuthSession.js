@@ -27,6 +27,9 @@ export function useAuthSession() {
       email: userData?.email || "jaswanth.arjun@gmail.com",
       avatar: userData?.avatar || "https://api.dicebear.com/7.x/avataaars/svg?seed=Jaswanth",
       id: userData?.id || "google_" + Date.now(),
+      // true when the profile came from a REAL Google OAuth ID token that
+      // the backend verified against Google's tokeninfo endpoint.
+      googleVerified: !!userData?.googleVerified,
       loggedInAt: new Date().toISOString(),
     };
     try {

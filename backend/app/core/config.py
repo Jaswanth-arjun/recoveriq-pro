@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     whatsapp_token: str = ""
     whatsapp_phone_id: str = ""
 
+    # Google Sign-In (Google Identity Services client id)
+    google_client_id: str = ""
+
     # Infra
     database_url: str = "postgresql+asyncpg://recoveriq:recoveriq@db:5432/recoveriq"
     redis_url: str = "redis://redis:6379/0"

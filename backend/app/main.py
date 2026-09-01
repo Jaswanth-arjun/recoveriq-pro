@@ -36,6 +36,21 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
+    # Enforce one abandonment per session: remove historical duplicates, then
+    # create the unique index (create_all won't alter an existing table).
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "DELETE FROM checkout_abandonments a USING checkout_abandonments b "
+                "WHERE a.id < b.id AND a.session_id = b.session_id"
+            ))
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_checkout_abandonments_session "
+                "ON checkout_abandonments (session_id)"
+            ))
+    except Exception:
+        pass
+
     # Start background task loop
     async def bg_loop():
         from app.worker import run_all_background_tasks

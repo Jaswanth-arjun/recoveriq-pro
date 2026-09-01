@@ -8,6 +8,22 @@ import {
 
 const clamp = (n) => Math.max(0, Math.min(MAX_QUANTITY, n));
 
+// Persist session across page loads so the backend can dedupe abandonment
+// records per user instead of creating a new one on every visit.
+const getStoredSessionId = () => {
+  if (typeof window === "undefined") return `sess_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+  try {
+    let sid = window.localStorage.getItem("gb_session_id");
+    if (!sid) {
+      sid = `sess_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+      window.localStorage.setItem("gb_session_id", sid);
+    }
+    return sid;
+  } catch {
+    return `sess_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+  }
+};
+
 export const useBasket = create((set) => ({
   quantities: {},
   lastAdded: null,
@@ -19,7 +35,7 @@ export const useBasket = create((set) => ({
   city: "Hyderabad",
   pincode: "500081",
   landmark: "Near Fresh Mart Supermarket",
-  sessionId: `sess_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+  sessionId: getStoredSessionId(),
   orderCompleted: false,
   setCustomerInfo: (info) => set((s) => ({ ...s, ...info })),
   setOrderCompleted: (orderCompleted) => set({ orderCompleted }),

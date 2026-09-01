@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { categories } from "../../data/categories";
 import { Scene } from "../../components/gb/Scene";
 import { Intro } from "../../components/gb/Intro";
@@ -10,6 +11,9 @@ import { BagDrawer } from "../../components/gb/BagDrawer";
 import { CategoryRail, ProgressBadge } from "../../components/gb/CategoryRail";
 import { usePrefersReducedMotion, useSectionScroll } from "../../hooks/useSectionScroll";
 import { useAbandonmentTracker } from "../../hooks/useAbandonmentTracker";
+import { useAuthSession } from "../../hooks/useAuthSession";
+import { GoogleSignInModal } from "../../components/gb/GoogleSignInModal";
+import { UserAuthHeader } from "../../components/gb/UserAuthHeader";
 
 const TOTAL = categories.length + 2; // intro + 8 worlds + final basket
 
@@ -17,14 +21,56 @@ export default function GreenBasketPage() {
   useAbandonmentTracker();
   const { index, goTo } = useSectionScroll(TOTAL);
   const reduced = usePrefersReducedMotion();
+  const { user, isLoggedIn, loginWithGoogle, logout } = useAuthSession();
+
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [pendingIndex, setPendingIndex] = useState(1);
 
   const isIntro = index === 0;
   const isFinal = index === TOTAL - 1;
   const categoryIndex = Math.min(Math.max(index - 1, 0), categories.length - 1);
   const activeCategory = isIntro ? -1 : isFinal ? categories.length : categoryIndex;
 
+  // Intercept section changes for unauthenticated users
+  const handleGoTo = (next) => {
+    if (!isLoggedIn && next > 0) {
+      setPendingIndex(next);
+      setShowAuthModal(true);
+      return;
+    }
+    goTo(next);
+  };
+
+  // If user scrolls down past intro while unauthenticated, trigger white blur overlay
+  useEffect(() => {
+    if (!isLoggedIn && index > 0) {
+      setShowAuthModal(true);
+    }
+  }, [index, isLoggedIn]);
+
+  const handleLoginSuccess = (userData) => {
+    loginWithGoogle(userData);
+    setShowAuthModal(false);
+    goTo(pendingIndex > 0 ? pendingIndex : 1);
+  };
+
+  const handleModalClose = () => {
+    setShowAuthModal(false);
+    goTo(0); // Return to clean intro section
+  };
+
   return (
     <main className="relative h-screen w-screen overflow-hidden text-ink select-none">
+      {/* Google User Profile Header (Top-Right) */}
+      <UserAuthHeader
+        user={user}
+        onLogout={logout}
+        onSignInClick={() => {
+          setPendingIndex(1);
+          setShowAuthModal(true);
+        }}
+      />
+
       {/* 3D WebGL Background Scene */}
       <Scene categoryIndex={categoryIndex} intro={isIntro} reduced={reduced} />
 
@@ -59,7 +105,7 @@ export default function GreenBasketPage() {
               }}
             >
               {i === 0 ? (
-                <Intro onStart={() => goTo(1)} />
+                <Intro onStart={() => handleGoTo(1)} />
               ) : i === TOTAL - 1 ? (
                 <FinalBasket />
               ) : (
@@ -76,7 +122,7 @@ export default function GreenBasketPage() {
 
       {!isIntro && !isFinal && (
         <>
-          <CategoryRail activeCategory={activeCategory} onSelect={(i) => goTo(i + 1)} />
+          <CategoryRail activeCategory={activeCategory} onSelect={(i) => handleGoTo(i + 1)} />
           <ProgressBadge index={categoryIndex + 1} label={categories[categoryIndex].name} />
         </>
       )}
@@ -88,7 +134,15 @@ export default function GreenBasketPage() {
 
       {/* FloatingBag: visible on category worlds, hidden on final basket */}
       {!isIntro && !isFinal && <FloatingBag />}
-      <BagDrawer onContinue={() => goTo(TOTAL - 1)} />
+      <BagDrawer onContinue={() => handleGoTo(TOTAL - 1)} />
+
+      {/* White Blur Screen Overlay & Google Sign In Modal for Unauthenticated Users */}
+      <GoogleSignInModal
+        isOpen={!isLoggedIn && (showAuthModal || index > 0)}
+        onLogin={handleLoginSuccess}
+        onClose={handleModalClose}
+      />
     </main>
   );
 }
+

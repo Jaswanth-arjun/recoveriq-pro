@@ -249,7 +249,9 @@ class CheckoutAbandonment(Base):
     __tablename__ = "checkout_abandonments"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     merchant_id: Mapped[int] = mapped_column(ForeignKey("merchants.id"))
-    session_id: Mapped[str] = mapped_column(String(128))
+    # unique: one abandonment per shopper session — concurrent beacon/fetch
+    # double-posts must dedupe to a single record, not two.
+    session_id: Mapped[str] = mapped_column(String(128), unique=True)
     customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), nullable=True)
     cart_items: Mapped[list] = mapped_column(JSON, default=list)
     cart_value: Mapped[float] = mapped_column(Float, default=0.0)

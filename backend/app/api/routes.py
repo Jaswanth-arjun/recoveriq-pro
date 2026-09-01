@@ -1978,6 +1978,26 @@ async def record_checkout_abandonment(request: Request, db: AsyncSession = Depen
     
     res_ex = await db.execute(select(CheckoutAbandonment).where(CheckoutAbandonment.session_id == req.session_id).limit(1))
     existing_ab = res_ex.scalar_one_or_none()
+
+    # Dedupe per customer: if this shopper already has an open (not recovered
+    # / expired) abandonment, update that record instead of creating another
+    # one — otherwise every visit with a fresh session_id spams duplicates.
+    if not existing_ab and (req.email or req.phone):
+        cust_ids = []
+        if req.email:
+            res_c = await db.execute(select(Customer.id).where(Customer.email == req.email))
+            cust_ids += [r[0] for r in res_c.all()]
+        if req.phone:
+            res_c = await db.execute(select(Customer.id).where(Customer.phone == req.phone))
+            cust_ids += [r[0] for r in res_c.all()]
+        if cust_ids:
+            res_open = await db.execute(
+                select(CheckoutAbandonment)
+                .where(CheckoutAbandonment.customer_id.in_(cust_ids),
+                       CheckoutAbandonment.status.notin_(["RECOVERED", "EXPIRED"]))
+                .order_by(desc(CheckoutAbandonment.id)).limit(1)
+            )
+            existing_ab = res_open.scalar_one_or_none()
     
     if existing_ab:
         cust = None

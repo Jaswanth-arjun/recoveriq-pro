@@ -6,6 +6,7 @@ import { Sunrise, PackageCheck, Repeat, X, Sparkles, CreditCard, AlertTriangle, 
 import { DELIVERY_DAYS_PER_MONTH, formatINR } from "../../data/products";
 import { useBasket, useBasketTotals } from "../../store/basket";
 import { api, API } from "../../lib/api";
+import { sendAbandonment } from "../../lib/abandonment";
 
 export function FinalBasket({ showCustomImage = false }) {
   const { lines, items, products, daily, monthly } = useBasketTotals();
@@ -78,60 +79,31 @@ export function FinalBasket({ showCustomImage = false }) {
   // Automatic Checkout Abandonment Detection & Realtime Sync
   useEffect(() => {
     if (orderCompleted) return;
+    // Only track when the shopper actually has items in the bag — never fire
+    // for prefilled-but-empty visits (that created fake ₹500 duplicates).
     const cartVal = monthly > 0 ? monthly : daily;
-    if (cartVal <= 0 && !customerName && !customerEmail && !customerPhone) return;
+    if (lines.length === 0 || cartVal <= 0) return;
 
     const triggerAbandonment = (reason = "tab_switch_or_exit", unloading = false) => {
       if (orderCompleted) return;
-
-      const payload = JSON.stringify({
-        session_id: sessionId,
-        name: customerName,
-        email: customerEmail,
-        phone: customerPhone,
-        cart_items: getItemsDetail(),
-        cart_value: cartVal > 0 ? cartVal : 500,
-        stage: "checkout_basket",
-        reason: reason,
-      });
-
-      const endpoint = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/checkouts/abandon`;
-
-      // sendBeacon cannot complete cross-origin requests that need a CORS
-      // preflight (Content-Type: application/json) — `text/plain` IS
-      // CORS-safelisted, so beacons must always use it (the backend parses
-      // the raw body bytes regardless of the content-type header).
-      const sendBeacon = () => {
-        if (typeof navigator === "undefined" || !navigator.sendBeacon) return false;
-        try {
-          const blob = new Blob([payload], { type: "text/plain" });
-          return navigator.sendBeacon(endpoint, blob);
-        } catch (e) {
-          return false;
-        }
-      };
-
-      const sendFetch = () => {
-        fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: payload,
-          keepalive: true,
-        }).catch(() => {});
-      };
-
-      if (unloading) {
-        // Page is unloading: beacon (text/plain) is the reliable path.
-        if (!sendBeacon()) sendFetch();
-      } else {
-        // Page still alive: plain fetch handles CORS preflight correctly.
-        sendFetch();
-      }
+      sendAbandonment(
+        {
+          session_id: sessionId,
+          name: customerName,
+          email: customerEmail,
+          phone: customerPhone,
+          cart_items: getItemsDetail(),
+          cart_value: cartVal > 0 ? cartVal : 0,
+          stage: "checkout_basket",
+          reason: reason,
+        },
+        { unloading },
+      );
     };
 
     // Auto-sync when customer enters details or opens checkout
     const timer = setTimeout(() => {
-      if (customerName || customerEmail || customerPhone || cartVal > 0) {
+      if (lines.length > 0) {
         triggerAbandonment("customer_details_entered");
       }
     }, 1000);

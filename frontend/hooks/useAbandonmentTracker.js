@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useBasket, useBasketTotals } from "../store/basket";
-import { API } from "../lib/api";
+import { sendAbandonment } from "../lib/abandonment";
 
 export function useAbandonmentTracker() {
   const { lines, daily, monthly } = useBasketTotals();
@@ -12,8 +12,10 @@ export function useAbandonmentTracker() {
 
   useEffect(() => {
     if (orderCompleted) return;
+    // Only track when the shopper actually has items in the bag — never fire
+    // for prefilled-but-empty visits (that created fake ₹500 duplicates).
     const cartVal = monthly > 0 ? monthly : daily;
-    if (cartVal <= 0 && !customerName && !customerEmail && !customerPhone) return;
+    if (lines.length === 0 || cartVal <= 0) return;
 
     const getItemsDetail = () => {
       return lines.map((l) => ({
@@ -26,69 +28,36 @@ export function useAbandonmentTracker() {
 
     const triggerAbandonment = (reason = "tab_switch_or_exit", unloading = false) => {
       if (orderCompleted) return;
-
-      const payload = JSON.stringify({
-        session_id: sessionId,
-        name: customerName,
-        email: customerEmail,
-        phone: customerPhone,
-        cart_items: getItemsDetail(),
-        cart_value: cartVal > 0 ? cartVal : 500,
-        stage: "checkout_basket",
-        reason: reason,
-      });
-      const base = process.env.NEXT_PUBLIC_API_URL || API;
-      const endpoint = `${base}/api/checkouts/abandon`;
-
-      // sendBeacon cannot complete cross-origin requests that need a CORS
-      // preflight (e.g. Content-Type: application/json) — the browser drops
-      // the POST silently after the OPTIONS. `text/plain` IS CORS-safelisted,
-      // so beacons must always use it (backend parses the raw body anyway).
-      const sendBeacon = () => {
-        if (typeof navigator === "undefined" || !navigator.sendBeacon) return false;
-        try {
-          const blob = new Blob([payload], { type: "text/plain" });
-          console.info("[abandonment] sending beacon to", endpoint, "reason=", reason);
-          return navigator.sendBeacon(endpoint, blob);
-        } catch (e) {
-          return false;
-        }
-      };
-
-      const sendFetch = () => {
-        console.info("[abandonment] fetch to", endpoint, "reason=", reason);
-        fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: payload,
-          keepalive: true,
-        }).catch(() => { });
-      };
-
-      if (unloading) {
-        // Page is unloading: beacon (text/plain) is the reliable path.
-        if (!sendBeacon()) sendFetch();
-      } else {
-        // Page still alive: plain fetch handles CORS preflight correctly.
-        sendFetch();
-      }
+      sendAbandonment(
+        {
+          session_id: sessionId,
+          name: customerName,
+          email: customerEmail,
+          phone: customerPhone,
+          cart_items: getItemsDetail(),
+          cart_value: cartVal > 0 ? cartVal : 0,
+          stage: "checkout_basket",
+          reason: reason,
+        },
+        { unloading },
+      );
     };
 
-    // Auto-sync 1 second after adding items or typing customer info
+    // Auto-sync 1 second after adding items
     const timer = setTimeout(() => {
-      if (lines.length > 0 || customerName || customerEmail || customerPhone) {
+      if (lines.length > 0) {
         triggerAbandonment("cart_activity_auto_sync");
       }
     }, 1000);
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden" && (lines.length > 0 || customerName || customerEmail || customerPhone)) {
+      if (document.visibilityState === "hidden" && lines.length > 0) {
         triggerAbandonment("tab_hidden_during_checkout", true);
       }
     };
 
     const handlePageHide = () => {
-      if (lines.length > 0 || customerName || customerEmail || customerPhone) {
+      if (lines.length > 0) {
         triggerAbandonment("page_closed_during_checkout", true);
       }
     };

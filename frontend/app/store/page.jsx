@@ -132,15 +132,7 @@ export default function GreenBasketPage() {
       </div>
 
       {!isIntro && !isFinal && (
-        <>
-          <CategoryRail activeCategory={activeCategory} onSelect={(i) => handleGoTo(i + 1)} />
-          <ProgressBadge index={categoryIndex + 1} label={categories[categoryIndex].name} />
-        </>
-      )}
-      {isFinal && (
-        <div className="glass-soft fixed left-1/2 top-5 z-30 -translate-x-1/2 rounded-full px-5 py-2 text-[10px] uppercase tracking-[0.3em] text-muted-foreground sm:left-auto sm:right-8 sm:translate-x-0">
-          Final basket
-        </div>
+        <CategoryRail activeCategory={activeCategory} onSelect={(i) => handleGoTo(i + 1)} />
       )}
 
       {/* FloatingBag: visible on category worlds, hidden on final basket */}

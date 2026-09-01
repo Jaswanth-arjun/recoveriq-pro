@@ -5,7 +5,7 @@ import { LogOut, User, Sparkles } from "lucide-react";
 export function UserAuthHeader({ user, onLogout, onSignInClick }) {
   if (user) {
     return (
-      <div className="fixed top-4 left-4 sm:left-6 z-40 flex items-center gap-2 rounded-full border border-white/20 bg-black/50 p-1.5 pr-4 backdrop-blur-md shadow-xl transition-all duration-300">
+      <div className="fixed top-4 right-4 z-40 flex items-center gap-2 rounded-full border border-white/20 bg-black/50 p-1.5 pr-4 backdrop-blur-md shadow-xl transition-all duration-300">
         <img
           src={user.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name}`}
           alt={user.name}
@@ -35,7 +35,7 @@ export function UserAuthHeader({ user, onLogout, onSignInClick }) {
     <button
       type="button"
       onClick={onSignInClick}
-      className="fixed top-4 left-4 sm:left-6 z-40 flex items-center gap-2 rounded-full border border-emerald-400/40 bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-2 text-xs font-bold text-emerald-300 backdrop-blur-md shadow-xl transition-all cursor-pointer"
+      className="fixed top-4 right-4 z-40 flex items-center gap-2 rounded-full border border-emerald-400/40 bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-2 text-xs font-bold text-emerald-300 backdrop-blur-md shadow-xl transition-all cursor-pointer"
     >
       <User className="size-3.5" />
       <span>Sign In with Google</span>

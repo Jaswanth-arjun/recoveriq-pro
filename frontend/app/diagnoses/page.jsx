@@ -44,7 +44,12 @@ export default function DiagnosesPage() {
   function loadData() {
     setLoading(true);
     api("/failures")
-      .then((d) => setRows(Array.isArray(d) ? d : d.failures || d.items || []))
+      .then((d) => {
+        const all = Array.isArray(d) ? d : d.failures || d.items || [];
+        // Completed purchases auto-recover abandoned carts — those risks
+        // should disappear from Diagnoses, not linger as stale rows.
+        setRows(all.filter((r) => !(r.event_type === "checkout.abandoned" && (r.status === "recovered" || r.recovered))));
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }

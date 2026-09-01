@@ -388,7 +388,12 @@ async def create_subscription(req: CreateSubscriptionRequest, db: AsyncSession =
     db.add(sub)
     await db.commit()
     await db.refresh(sub)
-    await broadcast("subscription.created", {"id": sub.id, "customer": customer.name, "status": sub.status})
+
+    # Shopper completed the subscription → close any open checkout
+    # abandonment for this customer so the risk leaves the Diagnoses list.
+    recovery = await mark_customer_abandonments_recovered(db, customer)
+
+    await broadcast("subscription.created", {"id": sub.id, "customer": customer.name, "status": sub.status, **recovery})
     return {
         "ok": True,
         "id": sub.id,
@@ -396,6 +401,7 @@ async def create_subscription(req: CreateSubscriptionRequest, db: AsyncSession =
         "status": sub.status,
         "customer_name": customer.name,
         "delivery_address": delivery_addr,
+        **recovery,
     }
 
 
@@ -518,6 +524,54 @@ async def delete_subscription(sub_id: int, db: AsyncSession = Depends(get_db)):
 
 # ---------------------------------------------------------------- ONE-TIME GROCERY ORDERS
 
+async def mark_customer_abandonments_recovered(db: AsyncSession, customer: Customer) -> dict:
+    """
+    When a shopper who previously abandoned checkout COMPLETES a purchase
+    (one-time order or subscription), close the loop: mark their open
+    checkout abandonment(s) RECOVERED and the linked failure event
+    'recovered' so it disappears from the Diagnoses list.
+    """
+    if not customer:
+        return {"recovered_ids": []}
+
+    res = await db.execute(
+        select(CheckoutAbandonment)
+        .where(CheckoutAbandonment.customer_id == customer.id,
+               CheckoutAbandonment.status.notin_(["RECOVERED", "EXPIRED", "EXPIRED_PURGED"]))
+        .order_by(desc(CheckoutAbandonment.id))
+    )
+    open_abs = res.scalars().all()
+    if not open_abs:
+        return {"recovered_ids": []}
+
+    recovered_ids = []
+    from datetime import timezone as _tz
+    for ab in open_abs:
+        ab.status = "RECOVERED"
+        ev = await db.get(FailureEvent, ab.failure_event_id) if ab.failure_event_id else None
+        if ev and ev.status != "recovered":
+            tt = None
+            if ev.created_at:
+                tt = int((datetime.now(_tz.utc) - ev.created_at.replace(tzinfo=_tz.utc)).total_seconds())
+            db.add(Outcome(
+                failure_event_id=ev.id, recovered_paise=ev.amount_paise,
+                recovered=True, time_to_recovery_seconds=tt,
+                recovered_via="completed_purchase",
+                razorpay_payment_id="",
+            ))
+            ev.status = "recovered"
+            await audit(db, ev.id, "outcome", "RECOVERED", {
+                "amount_inr": ev.amount_paise / 100,
+                "via": "completed_purchase",
+                "note": "Shopper completed the purchase after cart abandonment",
+            })
+            await broadcast("recovered", {"id": ev.id, "amount_inr": ev.amount_paise / 100,
+                                          "via": "completed_purchase"})
+        recovered_ids.append(ab.id)
+    await db.commit()
+    return {"recovered_ids": recovered_ids}
+
+
 class OrderCreate(BaseModel):
     name: str
     email: str
@@ -537,7 +591,9 @@ class OrderCreate(BaseModel):
 async def create_one_time_order(body: OrderCreate, db: AsyncSession = Depends(get_db)):
     merchant = await ensure_merchant(db)
 
-    c_res = await db.execute(select(Customer).where(Customer.phone == body.phone))
+    c_res = await db.execute(
+        select(Customer).where(Customer.phone == body.phone).order_by(desc(Customer.id)).limit(1)
+    )
     cust = c_res.scalar_one_or_none()
     if not cust:
         cust = Customer(
@@ -584,12 +640,17 @@ async def create_one_time_order(body: OrderCreate, db: AsyncSession = Depends(ge
     await db.commit()
     await db.refresh(order)
 
+    # Shopper completed the purchase → close any open checkout abandonment
+    # for this customer so the risk disappears from the Diagnoses list.
+    recovery = await mark_customer_abandonments_recovered(db, cust)
+
     await broadcast("order.created", {
         "id": order.id,
         "order_code": order.order_code,
         "payment_type": order.payment_type,
         "payment_status": order.payment_status,
         "delivery_status": order.delivery_status,
+        **recovery,
     })
 
     return {
@@ -602,6 +663,7 @@ async def create_one_time_order(body: OrderCreate, db: AsyncSession = Depends(ge
         "items_count": order.items_count,
         "items_detail": order.items_detail or [],
         "created_at": order.created_at,
+        **recovery,
     }
 
 

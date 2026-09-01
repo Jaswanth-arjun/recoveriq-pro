@@ -62,16 +62,11 @@ export default function DashboardPage() {
     language: "en",
   });
   const [showTrigger, setShowTrigger] = useState(false);
-  const [anomalies, setAnomalies] = useState([]);
 
   const loadMetrics = useCallback(async () => {
     try {
-      const [m, a] = await Promise.all([
-        api("/metrics"),
-        api("/anomalies").catch(() => []),
-      ]);
+      const m = await api("/metrics");
       setMetrics(m);
-      setAnomalies(a || []);
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -165,44 +160,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Payment Degradation Anomaly Banner */}
-      {anomalies && anomalies.length > 0 && anomalies[0].status === "ACTIVE" && (
-        <div className="rounded-xl border border-rose-500/50 bg-rose-950/40 p-4 shadow-lg shadow-rose-950/20">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-start gap-3">
-              <span className="text-2xl">⚠️</span>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-rose-400 text-sm">
-                    PAYMENT DEGRADATION ANOMALY DETECTED ({anomalies[0].gateway})
-                  </span>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/30 text-rose-300 uppercase">
-                    {anomalies[0].severity}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-300 mt-1">
-                  Success rate dropped to <span className="font-bold text-white">{anomalies[0].current_success_rate}%</span> (Baseline {anomalies[0].baseline_success_rate}% · Drop: -{anomalies[0].drop_percentage}%).
-                  Affected payments: <span className="font-bold text-white">{anomalies[0].affected_payments_count}</span>. Top Error: <span className="font-mono text-amber-300">{anomalies[0].top_error_code}</span>.
-                </p>
-                {anomalies[0].ai_diagnosis?.root_cause && (
-                  <div className="text-[11px] text-slate-400 mt-1">
-                    🤖 <span className="text-emerald-400 font-semibold">AI Root Cause Diagnosis:</span> {anomalies[0].ai_diagnosis.root_cause}. Recommended Action: <span className="font-mono text-white">{anomalies[0].recommended_action}</span>.
-                  </div>
-                )}
-              </div>
-            </div>
-            <button
-              onClick={async () => {
-                await api("/anomalies/check", { method: "POST" });
-                loadMetrics();
-              }}
-              className="shrink-0 rounded bg-rose-500 hover:bg-rose-400 text-white font-bold px-3 py-1.5 text-xs transition-colors"
-            >
-              Re-Analyze Anomaly
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Payment Degradation Anomaly feature removed */}
 
       {/* System Status Bar */}
       {systemStatus && (

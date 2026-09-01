@@ -339,7 +339,7 @@ async def run_all_background_tasks():
             await check_broken_promises_task(db)
             await process_b2b_aging_task(db)
             await process_b2b_receivables_worker_task(db)
-            await detect_payment_degradation_task(db)
+            # Payment degradation anomaly feature removed
         except Exception as e:
             print(f"[BACKGROUND TASK ERROR] {e}")
 

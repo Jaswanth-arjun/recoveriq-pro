@@ -14,12 +14,25 @@ import { useAbandonmentTracker } from "../../hooks/useAbandonmentTracker";
 import { useAuthSession } from "../../hooks/useAuthSession";
 import { GoogleSignInModal } from "../../components/gb/GoogleSignInModal";
 import { UserAuthHeader } from "../../components/gb/UserAuthHeader";
+import { useBasket } from "../../store/basket";
 
 const TOTAL = categories.length + 2; // intro + 8 worlds + final basket
 
 export default function GreenBasketPage() {
   useAbandonmentTracker();
   const { user, isLoggedIn, loginWithGoogle, logout } = useAuthSession();
+
+  // Sync the SIGNED-IN shopper identity into the basket store so checkout
+  // abandonment records (and the 1hr/24hr recovery emails) are linked to the
+  // real registered Google email — never the prefilled demo defaults.
+  useEffect(() => {
+    if (user?.googleVerified && user.email) {
+      useBasket.getState().setCustomerInfo({
+        customerName: user.name || "Shopper",
+        customerEmail: user.email,
+      });
+    }
+  }, [user]);
 
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [pendingIndex, setPendingIndex] = useState(1);

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { getApiBase } from "../../../lib/api";
 
 export default function PublicP2PPage() {
   const params = useParams();
@@ -14,7 +15,7 @@ export default function PublicP2PPage() {
   const [submitting, setSubmitting] = useState(false);
   const [successResult, setSuccessResult] = useState(null);
 
-  const API_BASE = "http://localhost:8000/api";
+  const getApiUrl = (path) => `${getApiBase()}/api${path}`;
 
   useEffect(() => {
     if (!invoiceId) return;
@@ -25,7 +26,7 @@ export default function PublicP2PPage() {
     try {
       setLoading(true);
       setError("");
-      const res = await fetch(`${API_BASE}/public/invoices/${invoiceId}`);
+      const res = await fetch(getApiUrl(`/public/invoices/${invoiceId}`));
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.detail || "Invoice not found or link expired.");
@@ -53,7 +54,7 @@ export default function PublicP2PPage() {
     try {
       setSubmitting(true);
       setError("");
-      const res = await fetch(`${API_BASE}/public/invoices/${invoiceId}/promise`, {
+      const res = await fetch(getApiUrl(`/public/invoices/${invoiceId}/promise`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ promised_date: selectedDate }),
@@ -145,7 +146,7 @@ export default function PublicP2PPage() {
             </p>
             <div className="pt-2">
               <a
-                href={`https://rzp.io/i/b2b-inv-${invoice.invoice_number.lower()}`}
+                href={`https://rzp.io/i/b2b-inv-${invoice?.invoice_number?.toLowerCase() || '1207'}`}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-block w-full py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-400 text-slate-950 font-bold text-sm shadow-lg shadow-emerald-500/20 hover:brightness-110 transition-all text-center"

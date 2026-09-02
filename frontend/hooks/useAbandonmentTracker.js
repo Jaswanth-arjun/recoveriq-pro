@@ -12,8 +12,6 @@ export function useAbandonmentTracker() {
 
   useEffect(() => {
     if (orderCompleted) return;
-    // Only track when the shopper actually has items in the bag — never fire
-    // for prefilled-but-empty visits (that created fake ₹500 duplicates).
     const cartVal = monthly > 0 ? monthly : daily;
     if (lines.length === 0 || cartVal <= 0) return;
 
@@ -43,12 +41,12 @@ export function useAbandonmentTracker() {
       );
     };
 
-    // Auto-sync 1 second after adding items
+    // Auto-sync 800ms after adding items so risk is persisted even before tab switch
     const timer = setTimeout(() => {
       if (lines.length > 0) {
         triggerAbandonment("cart_activity_auto_sync");
       }
-    }, 1000);
+    }, 800);
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden" && lines.length > 0) {
@@ -62,15 +60,27 @@ export function useAbandonmentTracker() {
       }
     };
 
+    const handleBlur = () => {
+      if (lines.length > 0) {
+        triggerAbandonment("window_blur_during_checkout", true);
+      }
+    };
+
     window.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pagehide", handlePageHide);
     window.addEventListener("beforeunload", handlePageHide);
+    window.addEventListener("blur", handleBlur);
 
     return () => {
       clearTimeout(timer);
       window.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pagehide", handlePageHide);
       window.removeEventListener("beforeunload", handlePageHide);
+      window.removeEventListener("blur", handleBlur);
+      if (lines.length > 0 && !orderCompleted) {
+        triggerAbandonment("navigated_away_from_checkout", true);
+      }
     };
   }, [sessionId, customerName, customerEmail, customerPhone, monthly, daily, orderCompleted, lines]);
 }
+

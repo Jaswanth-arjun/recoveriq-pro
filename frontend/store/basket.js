@@ -38,7 +38,17 @@ export const useBasket = create((set) => ({
   sessionId: getStoredSessionId(),
   orderCompleted: false,
   setCustomerInfo: (info) => set((s) => ({ ...s, ...info })),
-  setOrderCompleted: (orderCompleted) => set({ orderCompleted }),
+  setOrderCompleted: (orderCompleted) => {
+    if (orderCompleted) {
+      const newSid = `sess_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+      if (typeof window !== "undefined") {
+        try { window.localStorage.setItem("gb_session_id", newSid); } catch {}
+      }
+      set({ orderCompleted: true, sessionId: newSid });
+    } else {
+      set({ orderCompleted: false });
+    }
+  },
   setQuantity: (id, qty) =>
     set((s) => {
       const next = { ...s.quantities };
@@ -66,7 +76,13 @@ export const useBasket = create((set) => ({
       delete next[id];
       return { quantities: next };
     }),
-  clear: () => set({ quantities: {} }),
+  clear: () => {
+    const newSid = `sess_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    if (typeof window !== "undefined") {
+      try { window.localStorage.setItem("gb_session_id", newSid); } catch {}
+    }
+    set({ quantities: {}, sessionId: newSid, orderCompleted: false });
+  },
   setDrawerOpen: (drawerOpen) => set({ drawerOpen }),
 }));
 

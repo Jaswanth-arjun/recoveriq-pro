@@ -1,10 +1,23 @@
-export const API =
-  typeof window !== "undefined"
-    ? `http://${window.location.hostname}:8000`
-    : process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const getApiBase = () => {
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    const proto = window.location.protocol;
+    if (host.includes("ngrok") || (proto === "https:" && !host.includes("localhost"))) {
+      return `${proto}//${window.location.host}`;
+    }
+    // 127.0.0.1 instead of localhost: on Windows, "localhost" resolves to ::1
+    // (IPv6) first, which can hit a stale WSL relay instead of the Docker
+    // container — pinning IPv4 guarantees API traffic reaches the container.
+    return "http://127.0.0.1:8000";
+  }
+  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+};
+
+export const API = getApiBase();
 
 export async function api(path, options = {}) {
-  const res = await fetch(`${API}/api${path}`, {
+  const baseUrl = getApiBase();
+  const res = await fetch(`${baseUrl}/api${path}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -22,7 +35,11 @@ export async function api(path, options = {}) {
 export function wsUrl() {
   if (typeof window !== "undefined") {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${window.location.hostname}:8000/api/ws`;
+    const host = window.location.hostname;
+    if (host.includes("ngrok")) {
+      return `${proto}//${window.location.host}/api/ws`;
+    }
+    return "ws://127.0.0.1:8000/api/ws";
   }
   return process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/api/ws";
 }

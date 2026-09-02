@@ -26,9 +26,9 @@ export default function RootLayout({ children }) {
   const { connected } = useLive();
   const [open, setOpen] = useState(false);
 
-  const isStoreRoute = pathname?.startsWith("/store");
+  const isCustomerRoute = pathname?.startsWith("/store") || pathname?.startsWith("/p2p");
 
-  if (isStoreRoute) {
+  if (isCustomerRoute) {
     return (
       <html lang="en" className="dark" suppressHydrationWarning>
         <body className="bg-[#0e0b08] text-slate-200 min-h-screen antialiased" suppressHydrationWarning>

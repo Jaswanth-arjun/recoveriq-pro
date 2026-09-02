@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { api, inr } from "../../lib/api";
+import { api, inr, wsUrl } from "../../lib/api";
 
 function confBadge(c) {
   const n = Number(c || 0);
@@ -56,6 +56,33 @@ export default function DiagnosesPage() {
 
   useEffect(() => {
     loadData();
+
+    // Instant refetch on window focus (tab switch back to Diagnoses)
+    const onFocus = () => loadData();
+    window.addEventListener("focus", onFocus);
+
+    let ws = null;
+    try {
+      ws = new WebSocket(wsUrl());
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (["checkout.abandoned", "failure.detected", "decision.made", "recovered", "failure.deleted"].includes(msg.event)) {
+            loadData();
+          }
+        } catch {}
+      };
+    } catch {}
+
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible") loadData();
+    }, 3000);
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      clearInterval(poll);
+      if (ws) ws.close();
+    };
   }, []);
 
   async function handleDeleteEvent(eventId) {

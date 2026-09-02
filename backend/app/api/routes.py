@@ -1,9 +1,12 @@
+import asyncio
 import json
 import random
 import time
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect, HTTPException
+from urllib.parse import quote_plus
+
+from fastapi import APIRouter, Depends, Request, Response, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, func, desc
 from sqlalchemy.exc import IntegrityError
@@ -27,6 +30,28 @@ from app.services.events import connect, disconnect, broadcast
 from app.worker import schedule_retry
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------- twiml (fetched by Twilio servers)
+
+
+@router.api_route("/twiml/voice", methods=["GET", "POST"])
+async def twiml_voice(script: str = "", voice: str = "Polly.Aditi"):
+    """
+    Public TwiML endpoint. Twilio trial accounts cannot use the inline Twiml
+    parameter, so make_twilio_call passes a public Url pointing here and Twilio
+    GETs it at call time to fetch the script to speak.
+    """
+    import re as _re
+    from xml.sax.saxutils import escape as _escape
+
+    safe_script = _escape(script[:1200])
+    voice = voice if _re.fullmatch(r"[A-Za-z0-9.\-]{1,40}", voice or "") else "Polly.Aditi"
+    xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        f"<Response><Say voice='{voice}'>{safe_script}</Say></Response>"
+    )
+    return Response(content=xml, media_type="application/xml")
 
 
 # ---------------------------------------------------------------- setup
@@ -1580,8 +1605,16 @@ async def delete_b2b_invoice(inv_id: int, db: AsyncSession = Depends(get_db)):
     inv = await db.get(B2BInvoice, inv_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    await db.delete(inv)
-    await db.commit()
+    try:
+        # bulk-delete dependents FIRST (immediate, not deferred to flush) —
+        # promise_to_pay.invoice_id FK blocks the invoice delete otherwise
+        from sqlalchemy import delete as sa_delete
+        await db.execute(sa_delete(PromiseToPay).where(PromiseToPay.invoice_id == inv_id))
+        await db.delete(inv)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(409, "Invoice has linked records that block deletion")
     return {"ok": True, "deleted_id": inv_id}
 
 
@@ -1821,7 +1854,12 @@ Best regards,
 Executive Credit Control — RecoverIQ Pro
 """
         email_res = await send_email(cust_email, subject, body)
-        call_status = "Twilio Call Placed" if tw_res.get("called") else ("Audio Generated" if v_res.get("audio_base64") else "AI Voice Call Initiated")
+        if tw_res.get("called"):
+            call_status = f"Twilio Call Placed to {cust_phone} (SID {str(tw_res.get('call_sid', ''))[:14]})"
+        else:
+            reason = str(tw_res.get("reason") or "unknown error")
+            short_reason = str(tw_res.get("hint")) if tw_res.get("hint") else (reason[:150] + ("..." if len(reason) > 150 else ""))
+            call_status = f"Voice Call FAILED — {short_reason}"
         msg = f"Stage 7 Triggered: 8+ Days Overdue AI Voice Call ({call_status}) to {cust_phone} & Critical Email sent to {cust_email} (Sent: {email_res.get('sent', False)})"
         await audit(db, None, "executor", "VOICE_FOLLOWUP_INITIATED", {
             "invoice_id": inv.id,
@@ -2161,7 +2199,8 @@ class CheckoutAbandonmentRequest(BaseModel):
 
 async def _update_existing_abandonment(db: AsyncSession, merchant: Merchant, ab: CheckoutAbandonment, req: CheckoutAbandonmentRequest):
     """Update an already-recorded abandonment (same session or same customer)
-    instead of creating a duplicate failure event."""
+    instead of creating a duplicate failure event, ensuring it reactivates
+    and appears in the Diagnoses dashboard."""
     cust = None
     if ab.customer_id:
         cust = await db.get(Customer, ab.customer_id)
@@ -2179,7 +2218,7 @@ async def _update_existing_abandonment(db: AsyncSession, merchant: Merchant, ab:
         ab.customer_id = cust.id
 
     if cust:
-        if req.name: cust.name = req.name
+        if req.name and req.name != "Shopper": cust.name = req.name
         if req.email: cust.email = req.email
         if req.phone: cust.phone = req.phone
 
@@ -2187,20 +2226,63 @@ async def _update_existing_abandonment(db: AsyncSession, merchant: Merchant, ab:
     ab.cart_value = req.cart_value
     if req.reason:
         ab.abandonment_reason = req.reason
+    ab.status = "RECOVERY_INITIATED"
 
-    if ab.failure_event_id:
-        fe = await db.get(FailureEvent, ab.failure_event_id)
-        if fe:
-            fe.amount_paise = int(req.cart_value * 100)
-            fe.error_description = f"Customer abandoned checkout cart of ₹{req.cart_value}"
-            if fe.payment_id:
-                pay = await db.get(Payment, fe.payment_id)
-                if pay:
-                    pay.amount_paise = int(req.cart_value * 100)
-                    if cust: pay.customer_id = cust.id
+    event_id = ab.failure_event_id
+    fe = await db.get(FailureEvent, event_id) if event_id else None
+    if fe:
+        # Skip re-running the LLM pipeline if this risk already reached a
+        # terminal state (stopped/recovered) — repeated beacons would spam it.
+        rerun_pipeline = fe.status not in ("stopped", "recovered", "resolved")
+        fe.amount_paise = int(req.cart_value * 100)
+        fe.error_description = f"Customer abandoned checkout cart of ₹{req.cart_value}"
+        fe.status = "detected"
+        if fe.payment_id:
+            pay = await db.get(Payment, fe.payment_id)
+            if pay:
+                pay.amount_paise = int(req.cart_value * 100)
+                if cust: pay.customer_id = cust.id
+    else:
+        rerun_pipeline = True
+        payment = Payment(
+            merchant_id=merchant.id,
+            customer_id=cust.id if cust else None,
+            amount_paise=int(req.cart_value * 100),
+            description=f"Abandoned Cart Session #{req.session_id[:8]}",
+            status="failed"
+        )
+        db.add(payment)
+        await db.flush()
+
+        event = await pipeline.ingest_failure(
+            db, merchant.id, "checkout.abandoned",
+            {"session_id": req.session_id, "cart_value": req.cart_value},
+            "ABANDONED_CHECKOUT", f"Customer abandoned checkout cart of ₹{req.cart_value}",
+            payment.amount_paise, payment_id=payment.id
+        )
+        await db.flush()
+        ab.failure_event_id = event.id
+        event_id = event.id
+
     await db.commit()
-    await broadcast("checkout.abandoned", {"session_id": req.session_id, "cart_value": req.cart_value, "event_id": ab.failure_event_id})
-    return {"ok": True, "updated": True, "abandonment_id": ab.id, "event_id": ab.failure_event_id}
+
+    # Trigger background AI pipeline to re-diagnose & recover
+    async def _run_abandon_pipeline(eid: int = event_id):
+        try:
+            async with SessionLocal() as bg_db:
+                ev = await bg_db.get(FailureEvent, eid)
+                if ev:
+                    await run_pipeline(bg_db, ev)
+        except Exception as e:
+            from app.core.logging import logger
+            logger.error("abandon_pipeline_bg_error", error=str(e))
+
+    if event_id and rerun_pipeline:
+        asyncio.create_task(_run_abandon_pipeline())
+
+    await broadcast("checkout.abandoned", {"session_id": req.session_id, "cart_value": req.cart_value, "event_id": event_id})
+    await broadcast("failure.detected", {"id": event_id, "session_id": req.session_id})
+    return {"ok": True, "updated": True, "abandonment_id": ab.id, "event_id": event_id}
 
 
 @router.post("/checkouts/abandon")
@@ -2213,12 +2295,26 @@ async def record_checkout_abandonment(request: Request, db: AsyncSession = Depen
     except Exception as e:
         raise HTTPException(400, f"Invalid payload: {e}")
     
-    res_ex = await db.execute(select(CheckoutAbandonment).where(CheckoutAbandonment.session_id == req.session_id).limit(1))
+    if not req.session_id:
+        raise HTTPException(400, "Missing session_id")
+
+    closed_statuses = ("RECOVERED", "EXPIRED", "EXPIRED_PURGED")
+
+    # Match only OPEN abandonments for this session. A recovered/expired risk
+    # must NOT be reactivated by later beacons carrying the same stale
+    # session_id — those should create a fresh risk (or hit the customer-open
+    # lookup below) instead.
+    res_ex = await db.execute(
+        select(CheckoutAbandonment)
+        .where(CheckoutAbandonment.session_id == req.session_id,
+               CheckoutAbandonment.status.notin_(closed_statuses))
+        .order_by(desc(CheckoutAbandonment.id))
+        .limit(1)
+    )
     existing_ab = res_ex.scalar_one_or_none()
 
-    # Dedupe per customer: if this shopper already has an open (not recovered
-    # / expired) abandonment, update that record instead of creating another
-    # one — otherwise every visit with a fresh session_id spams duplicates.
+    # Dedupe per customer: if this shopper already has an OPEN abandonment,
+    # update that record
     if not existing_ab and (req.email or req.phone):
         cust_ids = []
         if req.email:
@@ -2231,7 +2327,7 @@ async def record_checkout_abandonment(request: Request, db: AsyncSession = Depen
             res_open = await db.execute(
                 select(CheckoutAbandonment)
                 .where(CheckoutAbandonment.customer_id.in_(cust_ids),
-                       CheckoutAbandonment.status.notin_(["RECOVERED", "EXPIRED"]))
+                       CheckoutAbandonment.status.notin_(closed_statuses))
                 .order_by(desc(CheckoutAbandonment.id)).limit(1)
             )
             existing_ab = res_open.scalar_one_or_none()
@@ -2266,14 +2362,42 @@ async def record_checkout_abandonment(request: Request, db: AsyncSession = Depen
     try:
         await db.flush()
     except IntegrityError:
-        # Lost a race with a concurrent double-post of the same session —
-        # the unique index guarantees a single record; update it instead.
+        # Unique session_id index: an existing row already holds this session.
         await db.rollback()
-        res_ex = await db.execute(select(CheckoutAbandonment).where(CheckoutAbandonment.session_id == req.session_id).limit(1))
+        res_ex = await db.execute(select(CheckoutAbandonment).where(CheckoutAbandonment.session_id == req.session_id).order_by(desc(CheckoutAbandonment.id)).limit(1))
         raced_ab = res_ex.scalar_one_or_none()
-        if raced_ab:
+        if raced_ab and raced_ab.status not in closed_statuses:
             return await _update_existing_abandonment(db, merchant, raced_ab, req)
-        raise HTTPException(409, "Concurrent abandonment conflict")
+        if raced_ab:
+            # A CLOSED (recovered/expired) record holds the stale session_id —
+            # release it so the shopper's NEW risk can be created fresh.
+            raced_ab.session_id = f"{raced_ab.session_id}_closed{raced_ab.id}"
+            await db.commit()
+            if cust is not None:
+                db.add(cust)
+                await db.flush()
+            ab = CheckoutAbandonment(
+                merchant_id=merchant.id,
+                session_id=req.session_id,
+                customer_id=cust.id if cust else None,
+                cart_items=req.cart_items,
+                cart_value=req.cart_value,
+                abandonment_stage=req.stage,
+                abandonment_reason=req.reason,
+                status="ABANDONED"
+            )
+            payment = Payment(
+                merchant_id=merchant.id,
+                customer_id=cust.id if cust else None,
+                amount_paise=int(req.cart_value * 100),
+                description=f"Abandoned Cart Session #{req.session_id[:8]}",
+                status="failed"
+            )
+            db.add(payment)
+            db.add(ab)
+            await db.flush()
+        else:
+            raise HTTPException(409, "Concurrent abandonment conflict")
 
     payment = Payment(
         merchant_id=merchant.id,
@@ -2296,9 +2420,20 @@ async def record_checkout_abandonment(request: Request, db: AsyncSession = Depen
     ab.status = "RECOVERY_INITIATED"
     await db.commit()
 
-    result = await run_pipeline(db, event)
+    async def _run_abandon_pipeline(event_id: int = event.id):
+        try:
+            async with SessionLocal() as bg_db:
+                ev = await bg_db.get(FailureEvent, event_id)
+                if ev:
+                    await run_pipeline(bg_db, ev)
+        except Exception as e:
+            from app.core.logging import logger
+            logger.error("abandon_pipeline_bg_error", error=str(e))
+
+    asyncio.create_task(_run_abandon_pipeline())
     await broadcast("checkout.abandoned", {"session_id": req.session_id, "cart_value": req.cart_value, "event_id": event.id})
-    return {"ok": True, "abandonment_id": ab.id, "event_id": event.id, **result}
+    await broadcast("failure.detected", {"id": event.id, "session_id": req.session_id})
+    return {"ok": True, "abandonment_id": ab.id, "event_id": event.id}
 
 
 @router.get("/checkouts/abandonments")

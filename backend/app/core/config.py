@@ -34,8 +34,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://recoveriq:recoveriq@db:5432/recoveriq"
     redis_url: str = "redis://redis:6379/0"
     sentry_dsn: str = ""
-    cors_origins: str = "http://localhost:3000"
-    frontend_url: str = "http://localhost:3000"
+    cors_origins: str = "http://localhost:3000,https://portable-debtor-unbridle.ngrok-free.dev"
+    frontend_url: str = "https://portable-debtor-unbridle.ngrok-free.dev"
     backend_url: str = "http://localhost:8000"
 
     class Config:

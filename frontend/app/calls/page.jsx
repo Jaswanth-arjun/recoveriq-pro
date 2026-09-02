@@ -119,6 +119,7 @@ export default function CallsPage() {
           >
             <div className="flex items-start justify-between gap-2">
               <span className="font-mono text-xs text-slate-500">#{c.id}</span>
+            <div className="flex items-start justify-between gap-2">
               <span
                 className={`rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
                   c.simulated
@@ -128,6 +129,24 @@ export default function CallsPage() {
               >
                 {c.simulated ? "NOT_CONFIGURED" : "LIVE"}
               </span>
+              {c.reason && (
+                <div className="mt-1 flex items-start gap-1 text-[10px] text-amber-300/90">
+                  <span>💡</span>
+                  <span>{c.reason}</span>
+                  {c.reason?.toLowerCase().includes("verified") && (
+                    <a
+                      href="https://console.twilio.com/us1/develop/phone-numbers/manage/verified"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline decoration-amber-400/50 hover:decoration-amber-300 ml-1 whitespace-nowrap"
+                    >
+                      Add as Verified Caller ID →
+                    </a>
+                  )}
+                </div>
+              )}
+              {c.hint && <p className="text-[11px] text-amber-300/80">{c.hint}</p>}
+            </div>
             </div>
             <p className="text-sm text-slate-300 line-clamp-3">
               {c.script_preview || c.script || "—"}

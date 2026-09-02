@@ -36,16 +36,21 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
-    # Enforce one abandonment per session: remove historical duplicates, then
-    # create the unique index (create_all won't alter an existing table).
+    # One OPEN abandonment per session: remove historical duplicates among
+    # open records, and use a NON-unique session index so a closed
+    # (recovered/expired) record can keep its stale session_id while the
+    # shopper starts a fresh risk under the same session.
     try:
         async with engine.begin() as conn:
             await conn.execute(text(
                 "DELETE FROM checkout_abandonments a USING checkout_abandonments b "
-                "WHERE a.id < b.id AND a.session_id = b.session_id"
+                "WHERE a.id < b.id AND a.session_id = b.session_id "
+                "AND a.status NOT IN ('RECOVERED','EXPIRED','EXPIRED_PURGED') "
+                "AND b.status NOT IN ('RECOVERED','EXPIRED','EXPIRED_PURGED')"
             ))
+            await conn.execute(text("DROP INDEX IF EXISTS ux_checkout_abandonments_session"))
             await conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ux_checkout_abandonments_session "
+                "CREATE INDEX IF NOT EXISTS ix_checkout_abandonments_session "
                 "ON checkout_abandonments (session_id)"
             ))
     except Exception:

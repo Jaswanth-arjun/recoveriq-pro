@@ -5,10 +5,7 @@ export const getApiBase = () => {
     if (host.includes("ngrok") || (proto === "https:" && !host.includes("localhost"))) {
       return `${proto}//${window.location.host}`;
     }
-    // 127.0.0.1 instead of localhost: on Windows, "localhost" resolves to ::1
-    // (IPv6) first, which can hit a stale WSL relay instead of the Docker
-    // container — pinning IPv4 guarantees API traffic reaches the container.
-    return "http://127.0.0.1:8000";
+    return `http://${host}:8000`;
   }
   return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 };
@@ -39,7 +36,7 @@ export function wsUrl() {
     if (host.includes("ngrok")) {
       return `${proto}//${window.location.host}/api/ws`;
     }
-    return "ws://127.0.0.1:8000/api/ws";
+    return `${proto}//${host}:8000/api/ws`;
   }
   return process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/api/ws";
 }

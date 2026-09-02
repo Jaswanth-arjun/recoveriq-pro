@@ -1,36 +1,40 @@
-import { getApiBase } from "./api";
+import { API, getApiBase } from "./api";
 
 let lastSendAt = 0;
-const THROTTLE_MS = 2000;
+const THROTTLE_MS = 5000;
 
 export function sendAbandonment(payload, { unloading = false } = {}) {
   const now = Date.now();
-  if (!unloading && now - lastSendAt < THROTTLE_MS) return;
+  if (now - lastSendAt < THROTTLE_MS) return;
   lastSendAt = now;
 
   const body = JSON.stringify(payload);
-  const base = getApiBase();
+  const base = getApiBase() || API;
   const endpoint = `${base}/api/checkouts/abandon`;
 
-  // Single send per trigger (double-sending duplicated backend pipeline runs).
-  if (unloading && typeof navigator !== "undefined" && navigator.sendBeacon) {
-    // Tab hidden/closed: sendBeacon fires reliably after the page freezes.
+  const sendBeacon = () => {
+    if (typeof navigator === "undefined" || !navigator.sendBeacon) return false;
     try {
-      navigator.sendBeacon(endpoint, new Blob([body], { type: "text/plain" }));
+      const blob = new Blob([body], { type: "text/plain" });
+      return navigator.sendBeacon(endpoint, blob);
     } catch {
-      try {
-        fetch(endpoint, { method: "POST", headers: { "Content-Type": "text/plain" }, body, keepalive: true }).catch(() => {});
-      } catch {}
+      return false;
     }
+  };
+
+  const sendFetch = () => {
+    fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      keepalive: true,
+    }).catch(() => { });
+  };
+
+  if (unloading) {
+    if (!sendBeacon()) sendFetch();
   } else {
-    try {
-      fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
-        keepalive: true,
-      }).catch(() => {});
-    } catch {}
+    sendFetch();
   }
 }
 

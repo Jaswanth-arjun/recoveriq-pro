@@ -29,7 +29,7 @@ export const useBasket = create((set) => ({
   lastAdded: null,
   drawerOpen: false,
   customerName: "Jaswanth Nelluru",
-  customerEmail: "jaswanth@gmail.com",
+  customerEmail: "jaswanthnelluru2004@gmail.com",
   customerPhone: "+919392443002",
   addressLine: "Flat 402, Green Glen Towers, Road No 3",
   city: "Hyderabad",

@@ -264,10 +264,22 @@ async def execute(db: AsyncSession, event: FailureEvent, decision: Decision) -> 
                     sms_res = await messaging.send_sms(customer.phone, msg)
                     action_record.detail["twilio_sms"] = sms_res
 
-                # Phone Call via Twilio
-                if customer.phone and settings.twilio_ready:
+                # Phone Call via Twilio — ONLY for real auto-pay/subscription
+                # failures above ₹10,000, never for live shopping abandonment
+                # (saves trial credit; low value / shopping abandonment uses
+                # SMS/WhatsApp/Email only).
+                is_shopping_abandonment = event.event_type == "checkout.abandoned"
+                if customer.phone and settings.twilio_ready and not is_shopping_abandonment and amount_inr > 10_000:
+                    voice_script = (
+                        f"Namaste {customer.name} gaaru! This is an automated call from GreenBasket Customer Success. "
+                        f"Mee {category.replace('_', ' ')} valla payment of {int(amount_inr)} rupees fail ayyindi. "
+                        f"Meeru maatramey mukhyam! "
+                        f"Payment cheyyadaniki meeku SMS mariyu Email lo payment link pampamu — "
+                        f"daya chesi mee SMS mariyu Email check chesi, aa link tho payment complete cheyandi. "
+                        f"Mee daily deliveries continue cheyyadaniki idhi chala avasaram. Dhanyavaadalu!"
+                    )
                     twilio_call = await voice_service.make_twilio_call(
-                        customer.phone, msg, customer.language
+                        customer.phone, voice_script, customer.language
                     )
                     action_record.detail["twilio"] = twilio_call
 
@@ -292,13 +304,16 @@ async def execute(db: AsyncSession, event: FailureEvent, decision: Decision) -> 
                 action_record.detail["email"] = {"status": "handled_by_razorpay", "to": customer.email}
 
         elif decision.action == "VOICE_RECOVERY":
-            script = await llm_service.compose_recovery_message(
-                customer.name if customer else "customer", amount_inr,
-                category, customer.language if customer else "te", "")
-            if not script or len(script) < 5:
-                script = (f"Namaste {customer.name if customer else 'customer'} gaaru, "
-                          f"mee payment of {int(amount_inr)} rupees fail ayyindi. "
-                          f"Daya chesi malli try cheyyandi. Dhanyavadalu.")
+            # AI voice agent calls ONLY for order values above ₹10,000 —
+            # below that, SMS + Email outreach is sufficient.
+            script = (
+                f"Namaste {customer.name if customer else 'customer'} gaaru! "
+                f"This is an automated call from GreenBasket Customer Success. "
+                f"Mee payment of {int(amount_inr)} rupees fail ayyindi. "
+                f"Payment cheyyadaniki meeku SMS mariyu Email lo payment link pampamu — "
+                f"daya chesi mee SMS mariyu Email check chesi, aa link tho payment complete cheyandi. "
+                f"Dhanyavaadalu."
+            )
             audio = await voice_service.generate_voice(script, customer.language if customer else "te")
             vc = VoiceCall(failure_event_id=event.id, script=script,
                            language=customer.language if customer else "te",
@@ -306,10 +321,14 @@ async def execute(db: AsyncSession, event: FailureEvent, decision: Decision) -> 
                            simulated=audio.get("engine") == "not_configured")
             db.add(vc)
             await db.flush()
-            
-            # Place automated Twilio phone call if customer phone & Twilio credentials available
+
+            # Place automated Twilio phone call — ONLY for real auto-pay/
+            # subscription failures with value above ₹10,000, never for live
+            # shopping abandonment (saves Twilio trial credit).
             twilio_call = {}
-            if customer and customer.phone:
+            if (customer and customer.phone
+                    and event.event_type != "checkout.abandoned"
+                    and amount_inr > 10_000):
                 twilio_call = await voice_service.make_twilio_call(
                     customer.phone, script, customer.language if customer else "te"
                 )

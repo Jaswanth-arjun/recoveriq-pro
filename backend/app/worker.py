@@ -48,6 +48,63 @@ async def process_retry(ctx, event_id: int):
         await run_pipeline(db, event, skip_gate=True)
 
 
+async def schedule_voice_call(sub_id: int, delay_hours: int, error_code: str = "", error_title: str = "") -> str | None:
+    """Queue a delayed AI voice-caller follow-up job. Returns job id (None if Redis unavailable)."""
+    try:
+        from arq import create_pool
+        pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+        job = await pool.enqueue_job(
+            "fire_scheduled_voice_call", sub_id, error_code, error_title,
+            _defer_by=timedelta(hours=delay_hours),
+        )
+        await pool.close()
+        return job.job_id if job else None
+    except Exception:
+        return None
+
+
+async def fire_scheduled_voice_call(ctx, sub_id: int, error_code: str = "", error_title: str = ""):
+    """Executes the scheduled AI voice-caller follow-up — skips if customer already paid."""
+    from app.models import Subscription, Customer
+    from app.services.events import broadcast
+    from app.services.voice import make_twilio_call
+
+    async with SessionLocal() as db:
+        sub = await db.get(Subscription, sub_id)
+        if not sub or sub.status == "PAID":
+            return  # customer paid in the meantime — no call needed
+        # AI voice agent only for order values above ₹10,000
+        if sub.monthly_total <= 10_000:
+            return
+        cust = await db.get(Customer, sub.customer_id)
+        if not cust or not cust.phone:
+            return
+
+        script = (
+            f"Namaste {cust.name} gaaru! This is an automated follow-up call from GreenBasket Customer Success. "
+            f"Mee monthly fresh grocery subscription auto-pay "
+            + (f"({error_title or error_code}) " if (error_title or error_code) else "")
+            + f"ani 24 hours kritham fail aindi. "
+            f"Payment cheyyadaniki meeku SMS mariyu Email lo payment link pampamu — "
+            f"mee daily morning 6 AM fresh delivery continue cheyyadaniki, "
+            f"daya chesi mee SMS mariyu Email check chesi, aa link tho payment complete cheyandi. "
+            f"Idhi automated reminder call. Dhanyavaadalu!"
+        )
+        call_res = await make_twilio_call(cust.phone, script, language="te")
+        await audit(db, None, "executor", "SCHEDULED_VOICE_CALL_FIRED", {
+            "subscription_id": sub_id,
+            "customer_name": cust.name,
+            "phone": cust.phone,
+            "error_code": error_code,
+            "call_result": call_res,
+        })
+        await db.commit()
+        await broadcast("voice.call_triggered", {
+            "subscription_id": sub_id, "customer": cust.name, "phone": cust.phone,
+            "scheduled": True, "call_res": call_res,
+        })
+
+
 async def check_broken_promises_task(db) -> list:
     """Check for PROMISED payments whose promised date has passed without payment."""
     from app.models import PromiseToPay, Customer, Payment, B2BInvoice
@@ -345,7 +402,7 @@ async def run_all_background_tasks():
 
 
 class WorkerSettings:
-    functions = [process_retry]
+    functions = [process_retry, fire_scheduled_voice_call]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url)

@@ -43,13 +43,8 @@ export function useAbandonmentTracker() {
       );
     };
 
-    // Auto-sync 1 second after adding items
-    const timer = setTimeout(() => {
-      if (lines.length > 0) {
-        triggerAbandonment("cart_activity_auto_sync");
-      }
-    }, 1000);
-
+    // NO auto-sync while shopping — abandonment only fires on tab switch
+    // (visibilitychange) or tab close (pagehide/beforeunload).
     const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden" && lines.length > 0) {
         triggerAbandonment("tab_hidden_during_checkout", true);
@@ -67,7 +62,6 @@ export function useAbandonmentTracker() {
     window.addEventListener("beforeunload", handlePageHide);
 
     return () => {
-      clearTimeout(timer);
       window.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pagehide", handlePageHide);
       window.removeEventListener("beforeunload", handlePageHide);

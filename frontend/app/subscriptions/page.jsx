@@ -3,7 +3,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, inr } from "../../lib/api";
 import useLive from "../../lib/useLive";
-import { UserCheck, MapPin, AlertTriangle, CheckCircle2, Ban, Trash2, ShoppingBag, Truck, CreditCard, DollarSign } from "lucide-react";
+import { UserCheck, MapPin, AlertTriangle, CheckCircle2, Ban, Trash2, ShoppingBag, Truck, CreditCard, DollarSign, PhoneCall, X, ShieldAlert } from "lucide-react";
+
+const FAILURE_RISK_CODES = [
+  { code: "INSUFFICIENT_FUNDS", label: "Insufficient Funds", icon: "💳", desc: "Low balance in customer bank account" },
+  { code: "CARD_EXPIRED", label: "Card Expired", icon: "💳", desc: "Debit/Credit card validity expired" },
+  { code: "PAYMENT_TIMED_OUT", label: "Payment Timed Out", icon: "⏱️", desc: "Bank gateway session timeout" },
+  { code: "CARD_INACTIVE", label: "Card Not Active", icon: "🚫", desc: "Card inactive or mandate disabled" },
+  { code: "NETWORK_ERROR", label: "Network Error", icon: "🌐", desc: "Inter-bank network communication error" },
+  { code: "INTL_BLOCKED", label: "Intl. Transaction Blocked", icon: "🌍", desc: "International transaction policy restriction" },
+  { code: "AUTHENTICATION_FAILED", label: "Authentication Failed", icon: "🔒", desc: "3DS 2FA mandate authentication failed" },
+];
 
 export default function SubscriptionsPage() {
   const [activeTab, setActiveTab] = useState("subscriptions"); // "subscriptions" | "one_time_orders"
@@ -13,6 +23,10 @@ export default function SubscriptionsPage() {
   const [busyId, setBusyId] = useState(null);
   const [notice, setNotice] = useState(null);
   const [error, setError] = useState(null);
+  const [selectedSubForFailure, setSelectedSubForFailure] = useState(null);
+  const [selectedErrorCode, setSelectedErrorCode] = useState("INSUFFICIENT_FUNDS");
+  const [scheduleVoiceCall, setScheduleVoiceCall] = useState(false);
+  const [voiceCallNotice, setVoiceCallNotice] = useState(null);
   const { events } = useLive();
 
   const loadSubscriptions = useCallback(async () => {
@@ -68,13 +82,49 @@ export default function SubscriptionsPage() {
     }
   };
 
-  const handleSimulateAutopayFailure = async (subId) => {
+  const handleOpenFailureModal = (sub) => {
+    setSelectedSubForFailure(sub);
+    setSelectedErrorCode("INSUFFICIENT_FUNDS");
+    setScheduleVoiceCall(false);
+  };
+
+  const handleConfirmAutopayFailure = async () => {
+    if (!selectedSubForFailure) return;
+    const subId = selectedSubForFailure.id;
     setBusyId(subId);
     try {
-      const res = await api(`/subscriptions/${subId}/simulate-autopay-failure`, { method: "POST" });
-      setNotice(`⚡ Auto-pay failure simulated for Sub #${subId}! Status updated to 'NOT PAID YET'. Event ID: ${res.event_id}`);
+      const res = await api(`/subscriptions/${subId}/simulate-autopay-failure`, {
+        method: "POST",
+        body: JSON.stringify({ error_code: selectedErrorCode, call_after_hours: scheduleVoiceCall ? 24 : 0 }),
+      });
+      const sched = res.scheduled_voice_call;
+      const schedTxt = sched?.scheduled
+        ? ` 📞 AI Voice Caller will call the customer after 24 hrs if still unpaid!`
+        : sched?.after_hours ? " ⚠️ Voice call scheduling unavailable (Redis/worker)." : "";
+      setNotice(`⚡ Auto-pay failure simulated (${res.error_title || selectedErrorCode}) for Sub #${subId}! Polite SMS, Email, and WhatsApp sent.${schedTxt}`);
+      setSelectedSubForFailure(null);
       loadSubscriptions();
-      setTimeout(() => setNotice(null), 5000);
+      setTimeout(() => setNotice(null), 6000);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleTrigger24hVoiceCall = async (subId) => {
+    setBusyId(`voice_${subId}`);
+    try {
+      const res = await api(`/subscriptions/${subId}/trigger-24h-voice-call`, { method: "POST" });
+      setVoiceCallNotice({
+        subId,
+        customerName: res.customer_name,
+        phone: res.phone,
+        script: res.script,
+        audioBase64: res.audio_base64
+      });
+      setNotice(`📞 24-Hour AI Follow-Up Voice Call dispatched to ${res.customer_name} (${res.phone})!`);
+      setTimeout(() => setNotice(null), 6000);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -404,11 +454,23 @@ export default function SubscriptionsPage() {
                     {sub.status === "PAID" && (
                       <button
                         disabled={busyId === sub.id}
-                        onClick={() => handleSimulateAutopayFailure(sub.id)}
-                        className="flex items-center gap-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 px-3 py-1.5 text-xs font-bold text-amber-300 transition cursor-pointer"
+                        onClick={() => handleOpenFailureModal(sub)}
+                        className="flex items-center gap-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 px-3 py-1.5 text-xs font-bold text-amber-300 transition cursor-pointer shadow-sm"
                       >
                         <AlertTriangle className="size-3.5" />
                         <span>Trigger Auto-Pay Failure</span>
+                      </button>
+                    )}
+
+                    {sub.status === "NOT_PAID_YET" && (
+                      <button
+                        disabled={busyId === `voice_${sub.id}`}
+                        onClick={() => handleTrigger24hVoiceCall(sub.id)}
+                        className="flex items-center gap-1.5 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/40 px-3 py-1.5 text-xs font-bold text-purple-300 transition cursor-pointer animate-pulse shadow-md"
+                        title="Simulate 24-Hour AI Follow-Up Voice Call for non-responsive customer"
+                      >
+                        <PhoneCall className="size-3.5 text-purple-400" />
+                        <span>📞 24h AI Voice Call (Follow-Up)</span>
                       </button>
                     )}
 
@@ -632,6 +694,146 @@ export default function SubscriptionsPage() {
             })}
           </div>
         </>
+      )}
+
+      {/* 24-HOUR VOICE CALL BANNER DISPLAY */}
+      {voiceCallNotice && (
+        <div className="fixed bottom-6 right-6 z-50 max-w-md rounded-2xl border border-purple-500/60 bg-[#161224]/95 p-5 text-white shadow-2xl backdrop-blur-lg animate-in fade-in slide-in-from-bottom-5">
+          <div className="flex items-center justify-between border-b border-purple-500/30 pb-2 mb-3">
+            <div className="flex items-center gap-2">
+              <PhoneCall className="size-5 text-purple-400 animate-pulse" />
+              <h4 className="text-sm font-bold text-purple-200">24-Hour AI Follow-Up Voice Call</h4>
+            </div>
+            <button
+              onClick={() => setVoiceCallNotice(null)}
+              className="text-slate-400 hover:text-white rounded-full p-1 cursor-pointer"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+          <p className="text-xs text-purple-300">
+            <strong>Target Customer:</strong> {voiceCallNotice.customerName} ({voiceCallNotice.phone})
+          </p>
+          <div className="mt-2.5 rounded-xl bg-purple-950/60 border border-purple-800/50 p-3 text-[11px] text-purple-100 font-mono leading-relaxed">
+            "{voiceCallNotice.script}"
+          </div>
+          {voiceCallNotice.audioBase64 ? (
+            <div className="mt-3">
+              <span className="text-[10px] uppercase font-bold text-purple-400 block mb-1">Play AI Voice Audio:</span>
+              <audio controls autoPlay className="w-full h-8 rounded-lg">
+                <source src={`data:audio/mp3;base64,${voiceCallNotice.audioBase64}`} type="audio/mp3" />
+              </audio>
+            </div>
+          ) : (
+            <p className="mt-2 text-[10px] text-amber-400">
+              ⚡ Voice call simulated via Twilio Programmable Voice engine.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* ERROR CODE SELECTOR MODAL */}
+      {selectedSubForFailure && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/80 px-4 backdrop-blur-md">
+          <div className="glass-panel w-full max-w-lg rounded-2xl border border-amber-500/40 bg-[#111827] p-6 text-left shadow-2xl">
+            <div className="flex justify-between items-center mb-4 border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="size-6 text-amber-400" />
+                <h3 className="text-lg font-bold text-white">Select Auto-Pay Failure Risk Code</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedSubForFailure(null)}
+                className="grid size-8 place-items-center rounded-full bg-slate-800 text-slate-300 hover:bg-slate-700 cursor-pointer"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400 mb-4">
+              Simulate next month auto-pay failure for <strong>{selectedSubForFailure.customer?.name}</strong> (#{selectedSubForFailure.subscription_code}). Select the specific error code to test RecoverIQ response:
+            </p>
+
+            {/* Error Code Radio Selector */}
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+              {FAILURE_RISK_CODES.map((item) => (
+                <label
+                  key={item.code}
+                  onClick={() => setSelectedErrorCode(item.code)}
+                  className={`flex items-start gap-3 rounded-xl border p-3 cursor-pointer transition ${
+                    selectedErrorCode === item.code
+                      ? "border-amber-500 bg-amber-500/10 text-white"
+                      : "border-slate-800 bg-slate-900/60 text-slate-400 hover:border-slate-700"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="error_code"
+                    checked={selectedErrorCode === item.code}
+                    onChange={() => setSelectedErrorCode(item.code)}
+                    className="mt-1 accent-amber-500"
+                  />
+                  <div className="flex-1 text-xs">
+                    <div className="font-bold flex items-center gap-1.5 text-white">
+                      <span>{item.icon}</span>
+                      <span>{item.label}</span>
+                      <span className="text-[10px] font-mono text-amber-400/90 bg-amber-950 px-1.5 py-0.5 rounded border border-amber-800/40">
+                        {item.code}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5">{item.desc}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+
+            {/* 24h AI Voice Caller option */}
+            <label
+              onClick={() => setScheduleVoiceCall(!scheduleVoiceCall)}
+              className={`mt-4 flex items-start gap-3 rounded-xl border p-3 cursor-pointer transition ${
+                scheduleVoiceCall
+                  ? "border-emerald-500 bg-emerald-500/10 text-white"
+                  : "border-slate-800 bg-slate-900/60 text-slate-400 hover:border-slate-700"
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={scheduleVoiceCall}
+                onChange={(e) => setScheduleVoiceCall(e.target.checked)}
+                className="mt-1 accent-emerald-500"
+              />
+              <div className="flex-1 text-xs">
+                <div className="font-bold flex items-center gap-1.5 text-white">
+                  <span>📞</span>
+                  <span>AI Voice Caller after 24 hrs</span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  If the customer doesn&apos;t pay within 24 hours, the RecoverIQ AI voice agent automatically calls them with a polite payment reminder.
+                </p>
+              </div>
+            </label>
+
+            {/* Confirm Actions */}
+            <div className="mt-6 flex justify-end gap-3 border-t border-slate-800 pt-4">
+              <button
+                type="button"
+                onClick={() => setSelectedSubForFailure(null)}
+                className="rounded-xl border border-slate-700 px-4 py-2 text-xs font-bold text-slate-300 hover:bg-slate-800 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busyId === selectedSubForFailure.id}
+                onClick={handleConfirmAutopayFailure}
+                className="flex items-center gap-2 rounded-xl bg-amber-500 hover:bg-amber-400 px-5 py-2 text-xs font-bold text-slate-950 transition cursor-pointer shadow-lg"
+              >
+                <AlertTriangle className="size-4" />
+                <span>Confirm Auto-Pay Failure ({selectedErrorCode})</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

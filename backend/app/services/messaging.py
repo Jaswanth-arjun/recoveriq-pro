@@ -60,15 +60,21 @@ async def send_whatsapp(phone: str, message: str) -> dict:
             else:
                 from_num = "whatsapp:+14155238886"  # Twilio WhatsApp Sandbox default
 
+            payload = {
+                "To": to_whatsapp,
+                "From": from_num,
+            }
+            if settings.twilio_content_sid:
+                payload["ContentSid"] = settings.twilio_content_sid
+                payload["ContentVariables"] = json.dumps({"1": message[:200]})
+            else:
+                payload["Body"] = message
+
             async with httpx.AsyncClient(timeout=20) as client:
                 resp = await client.post(
                     f"https://api.twilio.com/2010-04-01/Accounts/{settings.twilio_account_sid}/Messages.json",
                     auth=(settings.twilio_account_sid, settings.twilio_auth_token),
-                    data={
-                        "To": to_whatsapp,
-                        "From": from_num,
-                        "Body": message,
-                    },
+                    data=payload,
                 )
                 resp.raise_for_status()
                 data = resp.json()

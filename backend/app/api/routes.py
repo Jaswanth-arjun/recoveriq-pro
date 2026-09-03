@@ -418,6 +418,46 @@ async def create_subscription(req: CreateSubscriptionRequest, db: AsyncSession =
     # abandonment for this customer so the risk leaves the Diagnoses list.
     recovery = await mark_customer_abandonments_recovered(db, customer)
 
+    # Send WhatsApp greeting confirmation for subscription
+    if customer.phone:
+        try:
+            items_lines = []
+            for item in (req.items_detail or []):
+                name = item.get("name", "Item")
+                qty = item.get("quantity", 1)
+                unit = item.get("unit", "")
+                unit_str = f" ({unit})" if unit else ""
+                price = item.get("price")
+                if price is not None and qty:
+                    try:
+                        line_total = float(price) * float(qty)
+                        items_lines.append(
+                            f"• {name}{unit_str} — Qty: {qty} × ₹{float(price):,.2f} = ₹{line_total:,.2f}")
+                    except (TypeError, ValueError):
+                        items_lines.append(f"• {name}{unit_str} — Qty: {qty}")
+                else:
+                    items_lines.append(f"• {name}{unit_str} — Qty: {qty}")
+            items_text = "\n".join(items_lines) if items_lines else f"• {req.items_count} Subscribed Daily Items"
+
+            msg = (
+                f"🌿 *GreenBasket Subscription Confirmed!* 🌿\n\n"
+                f"Namaste {customer.name} gaaru! Thank you for subscribing to GreenBasket Daily Fresh Delivery.\n\n"
+                f"📦 *Subscribed Items ({req.items_count} items/day):*\n{items_text}\n\n"
+                f"💰 *Price Details:*\n"
+                f"• Daily Basket: ₹{req.daily_total:,.2f} / day\n"
+                f"• Monthly Total: ₹{req.monthly_total:,.2f} / month\n\n"
+                f"📍 *Delivery Location:*\n"
+                f"{req.address_line}, {req.city} - {req.pincode}\n\n"
+                f"⏰ *Delivery Schedule:* Fresh items delivered by 6:00 AM daily!\n\n"
+                f"Thank you for choosing GreenBasket! 🥦🍎"
+            )
+            asyncio.create_task(send_whatsapp(customer.phone, msg))
+            asyncio.create_task(send_sms(customer.phone, f"GreenBasket: Subscription #{sub_code} confirmed! Daily delivery by 6 AM. Thank you!"))
+            if customer.email:
+                asyncio.create_task(send_email(customer.email, "GreenBasket Subscription Confirmed! 🌿", msg))
+        except Exception as e:
+            pass
+
     await broadcast("subscription.created", {"id": sub.id, "customer": customer.name, "status": sub.status, **recovery})
     return {
         "ok": True,
@@ -482,18 +522,40 @@ async def cancel_subscription(sub_id: int, db: AsyncSession = Depends(get_db)):
     return {"ok": True, "id": sub_id, "status": "CANCELLED"}
 
 
+ERROR_DESCRIPTIONS = {
+    "INSUFFICIENT_FUNDS": ("Insufficient Funds", "Recurring monthly mandate failed due to insufficient balance in customer account."),
+    "CARD_EXPIRED": ("Card Expired", "Customer card expired prior to subscription auto-pay billing cycle."),
+    "PAYMENT_TIMED_OUT": ("Payment Timed Out", "Payment gateway connection timed out during mandate charge execution."),
+    "CARD_INACTIVE": ("Card Not Active", "Customer card is inactive or restricted from auto-pay recurring debits."),
+    "NETWORK_ERROR": ("Network Error", "Bank network communication error occurred during mandate processing."),
+    "INTL_BLOCKED": ("Intl. Transaction Blocked", "International transaction policy restricted card mandate execution."),
+    "AUTHENTICATION_FAILED": ("Authentication Failed", "3D Secure 2FA customer mandate authentication failed."),
+}
+
+
+class AutopayFailureRequest(BaseModel):
+    error_code: str = "INSUFFICIENT_FUNDS"
+    error_description: str | None = None
+    call_after_hours: int = 0  # >0 → schedule AI voice call after N hours if still unpaid
+
+
 @router.post("/subscriptions/{sub_id}/simulate-autopay-failure")
-async def simulate_autopay_failure(sub_id: int, db: AsyncSession = Depends(get_db)):
+async def simulate_autopay_failure(sub_id: int, body: AutopayFailureRequest | None = None, db: AsyncSession = Depends(get_db)):
     sub = await db.get(Subscription, sub_id)
     if not sub:
         raise HTTPException(404, "Subscription not found")
-    
+
+    code = (body.error_code.upper() if (body and body.error_code) else "INSUFFICIENT_FUNDS")
+    title, desc = ERROR_DESCRIPTIONS.get(code, (code, (body.error_description if body and body.error_description else f"Recurring monthly mandate failed: {code}")))
+    if body and body.error_description:
+        desc = body.error_description
+
     sub.status = "NOT_PAID_YET"
     payment = Payment(
         merchant_id=sub.merchant_id,
         customer_id=sub.customer_id,
         amount_paise=int(sub.monthly_total * 100),
-        description=f"Monthly Auto-Pay Renewal #{sub.subscription_code}",
+        description=f"Monthly Auto-Pay Renewal #{sub.subscription_code} ({title})",
         successful_payment_count=3,
         razorpay_payment_id=f"pay_autopay_{sub.id}_{int(time.time())}"
     )
@@ -502,15 +564,97 @@ async def simulate_autopay_failure(sub_id: int, db: AsyncSession = Depends(get_d
 
     event = await pipeline.ingest_failure(
         db, sub.merchant_id, "subscription.charged.failed",
-        {"trigger": "autopay_failure", "subscription_code": sub.subscription_code},
-        "INSUFFICIENT_FUNDS", "Recurring monthly mandate failed due to insufficient balance",
+        {"trigger": "autopay_failure", "subscription_code": sub.subscription_code, "error_code": code},
+        code, desc,
         payment.amount_paise, razorpay_payment_id=payment.razorpay_payment_id,
         payment_id=payment.id
     )
     await db.commit()
     result = await run_pipeline(db, event)
-    await broadcast("subscription.failed", {"id": sub_id, "status": "NOT_PAID_YET", "event_id": event.id})
-    return {"ok": True, "subscription_id": sub_id, "status": "NOT_PAID_YET", "event_id": event.id, **result}
+
+    cust = await db.get(Customer, sub.customer_id)
+    if cust and cust.phone:
+        pay_url = f"{settings.frontend_url}/pay/{event.recovery_token}" if hasattr(event, "recovery_token") else f"{settings.frontend_url}/pay/rec_{event.id}"
+        polite_msg = (
+            f"🌿 *GreenBasket Auto-Pay Update* 🌿\n\n"
+            f"Namaste {cust.name} gaaru! Your monthly GreenBasket subscription auto-pay of ₹{sub.monthly_total:,.2f} could not be processed.\n\n"
+            f"📌 *Reason:* {title} ({desc})\n\n"
+            f"To keep your daily fresh deliveries uninterrupted, please complete your payment using this secure link:\n"
+            f"👉 {pay_url}\n\n"
+            f"Thank you for choosing GreenBasket! 🥦🍎"
+        )
+        try:
+            asyncio.create_task(send_whatsapp(cust.phone, polite_msg))
+            polite_sms = (
+                f"🌿 GreenBasket: Namaste {cust.name} gaaru! Mee monthly auto-pay of "
+                f"₹{sub.monthly_total:,.2f} could not be processed ({title}). "
+                f"Daily fresh deliveries continue cheyyadaniki, payment cheyyadaniki "
+                f"mee Email lo kuda payment link pampamu. "
+                f"Secure payment link: {pay_url}"
+            )
+            asyncio.create_task(send_sms(cust.phone, polite_sms))
+            if cust.email:
+                asyncio.create_task(send_email(cust.email, f"GreenBasket Auto-Pay Update: {title}", polite_msg))
+        except Exception:
+            pass
+
+    # Optionally schedule an AI voice-caller follow-up after N hours
+    # (fires only if the customer still hasn't paid — checked in the worker).
+    scheduled_call = None
+    if body and body.call_after_hours and body.call_after_hours > 0:
+        try:
+            from app.worker import schedule_voice_call
+            job_id = await schedule_voice_call(sub_id, body.call_after_hours, code, title)
+            scheduled_call = {"scheduled": bool(job_id), "after_hours": body.call_after_hours, "job_id": job_id}
+            await broadcast("voice.call_scheduled", {
+                "subscription_id": sub_id, "customer": (cust.name if cust else ""),
+                "after_hours": body.call_after_hours, "error_code": code, "scheduled": bool(job_id),
+            })
+        except Exception as e:
+            scheduled_call = {"scheduled": False, "after_hours": body.call_after_hours, "reason": str(e)}
+
+    await broadcast("subscription.failed", {"id": sub_id, "status": "NOT_PAID_YET", "event_id": event.id, "error_code": code, "error_title": title})
+    return {"ok": True, "subscription_id": sub_id, "status": "NOT_PAID_YET", "event_id": event.id, "error_code": code, "error_title": title, "scheduled_voice_call": scheduled_call, **result}
+
+
+@router.post("/subscriptions/{sub_id}/trigger-24h-voice-call")
+async def trigger_subscription_24h_voice_call(sub_id: int, db: AsyncSession = Depends(get_db)):
+    sub = await db.get(Subscription, sub_id)
+    if not sub:
+        raise HTTPException(404, "Subscription not found")
+    cust = await db.get(Customer, sub.customer_id)
+    if not cust:
+        raise HTTPException(404, "Customer not found")
+
+    script = (
+        f"Namaste {cust.name} gaaru! Direct follow-up call from GreenBasket Customer Success. "
+        f"Mee monthly milk and fresh grocery subscription auto-payment 24 hours kritham fail aindi. "
+        f"Mee daily morning 6 AM fresh delivery miss avvakundaa undadaniki, "
+        f"payment cheyyadaniki meeku SMS mariyu Email lo payment link pampamu — "
+        f"daya chesi mee SMS mariyu Email check chesi, aa link tho payment complete cheyandi. Dhanyavaadalu!"
+    )
+
+    call_res = await make_twilio_call(cust.phone, script, language="te")
+    voice_res = await generate_voice(script, language="te")
+
+    await broadcast("voice.call_triggered", {
+        "subscription_id": sub_id,
+        "customer": cust.name,
+        "phone": cust.phone,
+        "script": script,
+        "status": "COMPLETED",
+        "call_res": call_res
+    })
+
+    return {
+        "ok": True,
+        "subscription_id": sub_id,
+        "customer_name": cust.name,
+        "phone": cust.phone,
+        "script": script,
+        "call_result": call_res,
+        "audio_base64": voice_res.get("audio_base64", "")
+    }
 
 
 @router.post("/subscriptions/cleanup-deleted")
@@ -668,6 +812,47 @@ async def create_one_time_order(body: OrderCreate, db: AsyncSession = Depends(ge
     # Shopper completed the purchase → close any open checkout abandonment
     # for this customer so the risk disappears from the Diagnoses list.
     recovery = await mark_customer_abandonments_recovered(db, cust)
+
+    # Send WhatsApp order confirmation & "Delivery on the way" message
+    if cust.phone:
+        try:
+            items_lines = []
+            for item in (body.items_detail or []):
+                name = item.get("name", "Item")
+                qty = item.get("quantity", 1)
+                unit = item.get("unit", "")
+                unit_str = f" ({unit})" if unit else ""
+                price = item.get("price")
+                if price is not None and qty:
+                    try:
+                        line_total = float(price) * float(qty)
+                        items_lines.append(
+                            f"• {name}{unit_str} — Qty: {qty} × ₹{float(price):,.2f} = ₹{line_total:,.2f}")
+                    except (TypeError, ValueError):
+                        items_lines.append(f"• {name}{unit_str} — Qty: {qty}")
+                else:
+                    items_lines.append(f"• {name}{unit_str} — Qty: {qty}")
+            items_text = "\n".join(items_lines) if items_lines else f"• {body.items_count} Grocery Items"
+
+            pay_info = f"💳 Razorpay (PAID)" if body.payment_type == "RAZORPAY" else f"💵 Cash on Delivery (₹{body.total_amount:,.2f})"
+
+            msg = (
+                f"🥦 *GreenBasket Order Confirmed!* 🚀\n\n"
+                f"Namaste {cust.name} gaaru! Your 1-time order *#{order_code}* has been placed successfully!\n\n"
+                f"🚚 *Delivery Status:* ON THE WAY! 📦\n\n"
+                f"🛒 *Ordered Items ({body.items_count} items):*\n{items_text}\n\n"
+                f"💰 *Total Amount:* ₹{body.total_amount:,.2f}\n"
+                f"💳 *Payment Method:* {pay_info}\n\n"
+                f"📍 *Delivery Address:*\n"
+                f"{body.address_line}, {body.city} - {body.pincode}\n\n"
+                f"Our delivery executive is on the way to your location! Thank you for shopping with GreenBasket! 🛍️✨"
+            )
+            asyncio.create_task(send_whatsapp(cust.phone, msg))
+            asyncio.create_task(send_sms(cust.phone, f"GreenBasket: Order #{order_code} confirmed (₹{body.total_amount:,.0f}). Delivery is ON THE WAY!"))
+            if cust.email:
+                asyncio.create_task(send_email(cust.email, f"GreenBasket Order #{order_code} Confirmed! 🚚 Delivery ON THE WAY", msg))
+        except Exception as e:
+            pass
 
     await broadcast("order.created", {
         "id": order.id,
@@ -1845,7 +2030,7 @@ Accounts Receivable — RecoverIQ Pro
         inv.last_reminder_at = now
 
         voice_lang = cust.language if cust and cust.language else "te"
-        voice_script = f"Namaste {cust_name} gaaru, this is an urgent credit recovery call from RecoverIQ Pro. Your B2B Invoice #{inv.invoice_number} for ₹{inv.outstanding_amount:,.2f} is now 8 days overdue. Please process payment immediately using the payment link sent to your email and SMS. Thank you."
+        voice_script = f"Namaste {cust_name} gaaru, this is an urgent credit recovery call from RecoverIQ Pro. Your B2B Invoice #{inv.invoice_number} for ₹{inv.outstanding_amount:,.2f} is now 8 days overdue. Payment cheyyadaniki meeku SMS mariyu Email lo payment link pampamu — daya chesi mee SMS mariyu Email check chesi, aa link tho payment process cheyandi immediately. Thank you."
 
         v_res = await voice_service.generate_voice(voice_script, voice_lang)
         tw_res = await voice_service.make_twilio_call(cust_phone, voice_script, voice_lang) if cust_phone else {"called": False}

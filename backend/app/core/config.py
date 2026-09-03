@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     twilio_auth_token: str = ""
     twilio_from_phone: str = ""
     twilio_whatsapp_from: str = ""
+    twilio_content_sid: str = ""
 
     # Messaging
     resend_api_key: str = ""

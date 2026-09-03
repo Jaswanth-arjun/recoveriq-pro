@@ -12,7 +12,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Compose_Enabled-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
 [![Redis](https://img.shields.io/badge/Redis-7_arq_Worker-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io)
 
-[🚀 Quick Start](#-quick-start-one-command) • [🎬 5-Minute Judge Demo](#-5-minute-judge-demo-script) • [🤖 7-Agent Pipeline](#-the-7-agent-autonomous-pipeline) • [📊 Track 03 Matrix](#-track-03-requirements--100-coverage) • [🔌 API Reference](#-api-reference-categorized)
+[🚀 Quick Start](#-quick-start-one-command) • [🤖 7-Agent Pipeline](#-the-7-agent-autonomous-pipeline) • [📊 Track 03 Matrix](#-track-03-requirements--100-coverage) • [🔌 API Reference](#-api-reference-categorized)
 
 </div>
 
@@ -37,13 +37,12 @@
    - [7. Embedded AI Copilot Assistant](#7-embedded-ai-copilot-assistant)
 9. [Multi-Channel Communication Audit (Real vs Simulated)](#-multi-channel-communication-audit-real-vs-simulated)
 10. [Graceful Degradation & Honesty Architecture](#-graceful-degradation--honesty-architecture)
-11. [5-Minute Judge Demo Script & Walkthrough](#-5-minute-judge-demo-script--walkthrough)
-12. [Key UI Pages Map](#-key-ui-pages-map)
-13. [Database Schema & 19 Tables Map](#-database-schema--19-tables-map)
-14. [API Reference (Categorized)](#-api-reference-categorized)
-15. [Production Design Decisions & Trade-offs](#-production-design-decisions--trade-offs)
-16. [Quick Start (One Command)](#-quick-start-one-command)
-17. [Troubleshooting & FAQs](#-troubleshooting--faqs)
+11. [Key UI Pages Map](#-key-ui-pages-map)
+12. [Database Schema & 19 Tables Map](#-database-schema--19-tables-map)
+13. [API Reference (Categorized)](#-api-reference-categorized)
+14. [Production Design Decisions & Trade-offs](#-production-design-decisions--trade-offs)
+15. [Quick Start (One Command)](#-quick-start-one-command)
+16. [Troubleshooting & FAQs](#-troubleshooting--faqs)
 
 ---
 
@@ -377,23 +376,6 @@ RecoverIQ Pro is engineered to handle real-world infrastructure failures without
 2. **Low AI Confidence (< 70%):** The strategist agent refuses to execute autonomous actions on low-confidence predictions, routing the event to human merchant review in the Approvals Queue.
 3. **Razorpay Webhook Downtime:** If webhooks are delayed, background arq polling workers periodically sync payment status directly with Razorpay REST APIs.
 4. **Missing Optional Credentials:** If ElevenLabs or Resend API keys are omitted in `.env`, the system gracefully downgrades that specific channel to `SIMULATED` mode while keeping the rest of the application fully operational.
-
----
-
-## 🎬 5-Minute Judge Demo Script & Walkthrough
-
-Follow this step-by-step presentation script to demonstrate the full capabilities of RecoverIQ Pro in 5 minutes:
-
-| Time | Step | Dashboard Action | What Judges See & Experience | Key Concept Demonstrated |
-|---|---|---|---|---|
-| **0:00** | **Clean Slate** | Navigate to `/` (Dashboard), click **"Reset Demo Data"**. | Financial counters reset to *At Risk ₹0*, *Recovered ₹0*, *Recovery Rate 0%*. | Real-time WebSocket initialization. |
-| **0:30** | **Payment Failure Ingestion** | Click **"Simulate Payment Failure"** (e.g., `BAD_REQUEST_PAYMENT_TIMED_OUT`, ₹2,500). | Pipeline runs instantly. Diagnoses tab shows: `DETECT` → `DIAGNOSE` (Transient User Error) → `DECIDE` (Action B) → `GATE` (ALLOW) → `ACT`. | 7-Agent Pipeline execution. |
-| **1:15** | **Audit Explainability** | Click **Timeline** (`/timeline`) and select the new event. | Complete step-by-step audit log showing agent reasoning, policy checks, and Razorpay API call IDs. | Explainability & "Every rupee has a receipt". |
-| **2:00** | **Auto-Pay Mandate Failure** | Navigate to **Subscribers & Delivery** (`/subscriptions`). Click **"Trigger Auto-Pay Failure"**. | Modal pops up with 7 error codes. Select **`CARD_EXPIRED`**. Check **"📞 24h AI Voice Call"**. Click Confirm. | Status flips to `NOT_PAID_YET`. Polite WhatsApp/SMS/Email sent. 24h call scheduled in Redis. | Subscription mandate recovery & risk classification. |
-| **2:45** | **High-Value Approval Gate** | Return to Dashboard, simulate high-value failure (**> ₹10,000**, e.g. ₹15,000). | Policy Guard triggers `APPROVAL_REQUIRED`. Event moves to **Approvals Queue** (`/approvals`). Click **Approve**. | Human-in-the-loop safety gate. |
-| **3:30** | **Real Telephony Voice Call** | In Approvals or Call Console (`/calls`), observe the voice action execution. | Twilio places a real phone call to your test phone. ElevenLabs Telugu audio preview plays in the browser. | Multilingual AI voice agent. |
-| **4:15** | **Storefront Abandonment** | Open GreenBasket Store (`/store`), add items to cart, then **switch tabs**. | Exit-intent beacon fires. Checkout abandonment appears on Diagnoses. Complete order → auto-marks **`RECOVERED`**. | Intent-driven checkout drop-off recovery. |
-| **4:45** | **AI Copilot & Report** | Click floating Copilot icon (bottom-right). Ask: *"How much revenue is at risk?"* | Copilot queries live DB and replies in natural language. Navigate to `/report` to view final analytics. | Live DB Copilot & Measured Money Recovery. |
 
 ---
 

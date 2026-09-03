@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import useLive from "../lib/useLive";
+import CopilotWidget from "../components/CopilotWidget";
 
 const NAV = [
   { href: "/", label: "Dashboard" },
@@ -16,7 +17,6 @@ const NAV = [
   { href: "/plan", label: "Recovery Plan" },
   { href: "/timeline", label: "Timeline" },
   { href: "/calls", label: "Call Console" },
-  { href: "/copilot", label: "Copilot" },
   { href: "/report", label: "Report" },
   { href: "/settings", label: "Settings" },
 ];
@@ -121,6 +121,7 @@ export default function RootLayout({ children }) {
               {children}
             </main>
           </div>
+          <CopilotWidget />
         </div>
       </body>
     </html>

@@ -11,27 +11,75 @@ from app.core.config import settings
 from app.core.logging import logger
 
 
+def format_e164_phone(phone: str) -> str:
+    p = phone.strip() if phone else ""
+    if not p:
+        return ""
+    if not p.startswith("+"):
+        if len(p) == 10:
+            p = "+91" + p
+        else:
+            p = "+" + p
+    return p
+
+
 async def send_whatsapp(phone: str, message: str) -> dict:
-    if not settings.whatsapp_ready:
-        logger.info("whatsapp_skipped", reason="WhatsApp not configured")
-        return {"sent": False, "channel": "whatsapp", "reason": "not_configured"}
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.post(
-                f"https://graph.facebook.com/v19.0/{settings.whatsapp_phone_id}/messages",
-                headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
-                json={
-                    "messaging_product": "whatsapp", "to": phone,
-                    "type": "text", "text": {"body": message},
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return {"sent": True, "channel": "whatsapp",
-                    "api_call_id": data.get("messages", [{}])[0].get("id", "")}
-    except Exception as e:
-        logger.error("whatsapp_error", error=str(e))
-        return {"sent": False, "channel": "whatsapp", "reason": str(e)}
+    to_phone = format_e164_phone(phone)
+    if not to_phone:
+        return {"sent": False, "channel": "whatsapp", "reason": "invalid_phone"}
+
+    # 1. Primary: Meta WhatsApp Business API if configured
+    if settings._is_real(settings.whatsapp_token) and settings._is_real(settings.whatsapp_phone_id):
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    f"https://graph.facebook.com/v19.0/{settings.whatsapp_phone_id}/messages",
+                    headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
+                    json={
+                        "messaging_product": "whatsapp", "to": to_phone,
+                        "type": "text", "text": {"body": message},
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return {"sent": True, "channel": "whatsapp", "provider": "meta",
+                        "api_call_id": data.get("messages", [{}])[0].get("id", "")}
+        except Exception as e:
+            logger.error("meta_whatsapp_error", error=str(e))
+            # Fallthrough to Twilio WhatsApp if Twilio is ready
+
+    # 2. Twilio Programmable Messaging API (WhatsApp)
+    if settings.twilio_ready:
+        try:
+            to_whatsapp = f"whatsapp:{to_phone}"
+
+            if settings.twilio_whatsapp_from:
+                from_num = settings.twilio_whatsapp_from if settings.twilio_whatsapp_from.startswith("whatsapp:") else f"whatsapp:{settings.twilio_whatsapp_from}"
+            elif settings.twilio_from_phone:
+                from_num = settings.twilio_from_phone if settings.twilio_from_phone.startswith("whatsapp:") else f"whatsapp:{settings.twilio_from_phone}"
+            else:
+                from_num = "whatsapp:+14155238886"  # Twilio WhatsApp Sandbox default
+
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    f"https://api.twilio.com/2010-04-01/Accounts/{settings.twilio_account_sid}/Messages.json",
+                    auth=(settings.twilio_account_sid, settings.twilio_auth_token),
+                    data={
+                        "To": to_whatsapp,
+                        "From": from_num,
+                        "Body": message,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                logger.info("twilio_whatsapp_sent_success", to=to_whatsapp, sid=data.get("sid"))
+                return {"sent": True, "channel": "whatsapp", "provider": "twilio", "api_call_id": data.get("sid", "")}
+        except Exception as e:
+            logger.error("twilio_whatsapp_error", error=str(e))
+            return {"sent": False, "channel": "whatsapp", "provider": "twilio", "reason": str(e)}
+
+    logger.info("whatsapp_skipped", reason="Neither Meta nor Twilio WhatsApp is configured")
+    return {"sent": False, "channel": "whatsapp", "reason": "not_configured"}
 
 
 async def send_sms(phone: str, message: str) -> dict:
@@ -39,12 +87,11 @@ async def send_sms(phone: str, message: str) -> dict:
         logger.info("sms_skipped", reason="Twilio not configured")
         return {"sent": False, "channel": "sms", "reason": "not_configured"}
     try:
-        to_phone = phone.strip()
-        if to_phone and not to_phone.startswith("+"):
-            if len(to_phone) == 10:
-                to_phone = "+91" + to_phone
-            elif not to_phone.startswith("+"):
-                to_phone = "+" + to_phone
+        to_phone = format_e164_phone(phone)
+        if not to_phone:
+            return {"sent": False, "channel": "sms", "reason": "invalid_phone"}
+
+        from_phone = settings.twilio_from_phone.replace("whatsapp:", "").strip()
 
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
@@ -52,17 +99,17 @@ async def send_sms(phone: str, message: str) -> dict:
                 auth=(settings.twilio_account_sid, settings.twilio_auth_token),
                 data={
                     "To": to_phone,
-                    "From": settings.twilio_from_phone,
+                    "From": from_phone,
                     "Body": message,
                 },
             )
             resp.raise_for_status()
             data = resp.json()
             logger.info("sms_sent_success", to=to_phone, sid=data.get("sid"))
-            return {"sent": True, "channel": "sms", "api_call_id": data.get("sid", "")}
+            return {"sent": True, "channel": "sms", "provider": "twilio", "api_call_id": data.get("sid", "")}
     except Exception as e:
         logger.error("sms_error", error=str(e))
-        return {"sent": False, "channel": "sms", "reason": str(e)}
+        return {"sent": False, "channel": "sms", "provider": "twilio", "reason": str(e)}
 
 
 async def send_email(to: str, subject: str, body: str) -> dict:

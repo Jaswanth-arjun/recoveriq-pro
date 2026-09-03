@@ -856,10 +856,31 @@ async def system_status():
         "voice": {"status": "connected" if settings.elevenlabs_ready else "not_configured", "provider": "elevenlabs"},
         "phone_call": {"status": "connected" if settings.twilio_ready else "not_configured", "provider": "twilio"},
         "email": {"status": "connected" if settings.resend_ready else "not_configured", "provider": "resend"},
-        "whatsapp": {"status": "connected" if settings.whatsapp_ready else "not_configured"},
+        "whatsapp": {
+            "status": "connected" if settings.whatsapp_ready else "not_configured",
+            "provider": "meta" if (settings._is_real(settings.whatsapp_token) and settings._is_real(settings.whatsapp_phone_id)) else ("twilio" if settings.twilio_ready else "none")
+        },
+        "sms": {"status": "connected" if settings.twilio_ready else "not_configured", "provider": "twilio"},
         "database": {"status": "connected"},
         "redis": {"status": "connected"},
     }
+
+
+class TestMessageRequest(BaseModel):
+    phone: str
+    message: str
+
+
+@router.post("/test/sms")
+async def test_send_sms(req: TestMessageRequest):
+    """Test dispatching an SMS via Twilio."""
+    return await send_sms(req.phone, req.message)
+
+
+@router.post("/test/whatsapp")
+async def test_send_whatsapp(req: TestMessageRequest):
+    """Test dispatching a WhatsApp message via Twilio or Meta."""
+    return await send_whatsapp(req.phone, req.message)
 
 
 # ---------------------------------------------------------------- dashboard / metrics
@@ -1858,6 +1879,9 @@ Executive Credit Control — RecoverIQ Pro
         sms_text = f"RecoverIQ Urgent Alert: Invoice #{inv.invoice_number} (₹{inv.outstanding_amount:,.2f}) is 8+ days overdue. Pay immediately: {payment_link}"
         sms_res = await send_sms(cust_phone, sms_text) if cust_phone else {"sent": False}
 
+        wa_text = f"RecoverIQ Urgent Alert: Invoice #{inv.invoice_number} (₹{inv.outstanding_amount:,.2f}) is 8+ days overdue. Pay immediately: {payment_link}"
+        wa_res = await send_whatsapp(cust_phone, wa_text) if cust_phone else {"sent": False}
+
         if tw_res.get("called"):
             call_status = f"Twilio Call Placed to {cust_phone} (SID {str(tw_res.get('call_sid', ''))[:14]})"
         else:
@@ -1865,7 +1889,7 @@ Executive Credit Control — RecoverIQ Pro
             short_reason = str(tw_res.get("hint")) if tw_res.get("hint") else (reason[:150] + ("..." if len(reason) > 150 else ""))
             call_status = f"Voice Call FAILED — {short_reason}"
 
-        msg = f"Stage 7 Triggered: 8+ Days Overdue AI Voice Call ({call_status}), SMS to {cust_phone} (SMS Sent: {sms_res.get('sent', False)}), & Critical Email sent to {cust_email} (Email Sent: {email_res.get('sent', False)})"
+        msg = f"Stage 7 Triggered: 8+ Days Overdue AI Voice Call ({call_status}), SMS (Sent: {sms_res.get('sent', False)}), WhatsApp (Sent: {wa_res.get('sent', False)}), & Critical Email sent to {cust_email} (Email Sent: {email_res.get('sent', False)})"
         
         await audit(db, None, "executor", "VOICE_FOLLOWUP_INITIATED", {
             "invoice_id": inv.id,
@@ -1874,7 +1898,8 @@ Executive Credit Control — RecoverIQ Pro
             "voice_call_id": vc.id,
             "script": voice_script,
             "email_sent": email_res.get("sent"),
-            "sms_sent": sms_res.get("sent")
+            "sms_sent": sms_res.get("sent"),
+            "whatsapp_sent": wa_res.get("sent")
         })
         await broadcast("call.generated", {"id": vc.id, "customer": cust_name, "phone": cust_phone, "invoice": inv.invoice_number})
 

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_from_phone: str = ""
+    twilio_whatsapp_from: str = ""
 
     # Messaging
     resend_api_key: str = ""
@@ -77,7 +78,8 @@ class Settings(BaseSettings):
 
     @property
     def whatsapp_ready(self) -> bool:
-        return self._is_real(self.whatsapp_token) and self._is_real(self.whatsapp_phone_id)
+        return (self._is_real(self.whatsapp_token) and self._is_real(self.whatsapp_phone_id)) or self.twilio_ready
+
 
 
 settings = Settings()

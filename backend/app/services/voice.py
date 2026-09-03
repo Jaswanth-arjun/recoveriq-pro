@@ -62,10 +62,11 @@ async def make_twilio_call(to_phone: str, script: str, language: str = "te") -> 
         clean_script = script.replace("&", "and").replace("<", "").replace(">", "")
 
         data = {"To": clean_to_phone, "From": settings.twilio_from_phone}
-        # Use Twilio's official public twimlets echo service so Twilio can always fetch TwiML XML
-        # without requiring a local ngrok tunnel to be running.
-        twiml_xml = f"<Response><Say voice='Polly.Aditi'>{clean_script}</Say></Response>"
-        data["Url"] = f"https://twimlets.com/echo?Twiml={quote_plus(twiml_xml)}"
+        # Self-hosted TwiML: Twilio fetches our public endpoint (ngrok -> backend).
+        # twimlets.com is deprecated and Twilio's production fetchers reject it.
+        # NOTE: trial accounts cannot use the inline "Twiml" parameter (400 limited access).
+        data["Url"] = (f"{settings.frontend_url}/api/twiml/voice"
+                       f"?script={quote_plus(clean_script[:1200])}")
 
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(

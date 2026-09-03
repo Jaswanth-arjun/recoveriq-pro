@@ -62,17 +62,10 @@ async def make_twilio_call(to_phone: str, script: str, language: str = "te") -> 
         clean_script = script.replace("&", "and").replace("<", "").replace(">", "")
 
         data = {"To": clean_to_phone, "From": settings.twilio_from_phone}
-        public_base = (settings.frontend_url or "").strip()
-        if public_base.startswith("http") and "localhost" not in public_base and "127.0.0.1" not in public_base:
-            # Point Twilio at the public TwiML URL
-            data["Url"] = (
-                f"{public_base.rstrip('/')}/twiml/voice"
-                f"?script={quote_plus(clean_script)}&voice=Polly.Aditi"
-            )
-        else:
-            # Twilio trial accounts require an HTTP URL for TwiML (inline TwiML is blocked on trial accounts)
-            twiml_xml = f"<Response><Say voice='Polly.Aditi'>{clean_script}</Say></Response>"
-            data["Url"] = f"https://twimlets.com/echo?Twiml={quote_plus(twiml_xml)}"
+        # Use Twilio's official public twimlets echo service so Twilio can always fetch TwiML XML
+        # without requiring a local ngrok tunnel to be running.
+        twiml_xml = f"<Response><Say voice='Polly.Aditi'>{clean_script}</Say></Response>"
+        data["Url"] = f"https://twimlets.com/echo?Twiml={quote_plus(twiml_xml)}"
 
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(

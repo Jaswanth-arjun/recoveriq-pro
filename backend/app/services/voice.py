@@ -22,7 +22,7 @@ async def generate_voice(script: str, language: str) -> dict:
 
     voice_id = settings.elevenlabs_voice_id
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
                 headers={"xi-api-key": settings.elevenlabs_api_key,
@@ -52,9 +52,16 @@ async def make_twilio_call(to_phone: str, script: str, language: str = "te") -> 
         logger.info("twilio_skipped", reason="Twilio not configured")
         return {"called": False, "channel": "twilio", "reason": "not_configured"}
     try:
+        clean_to_phone = to_phone.strip()
+        if clean_to_phone and not clean_to_phone.startswith("+"):
+            if len(clean_to_phone) == 10:
+                clean_to_phone = "+91" + clean_to_phone
+            else:
+                clean_to_phone = "+" + clean_to_phone
+
         clean_script = script.replace("&", "and").replace("<", "").replace(">", "")
 
-        data = {"To": to_phone, "From": settings.twilio_from_phone}
+        data = {"To": clean_to_phone, "From": settings.twilio_from_phone}
         public_base = (settings.frontend_url or "").strip()
         if public_base.startswith("http") and "localhost" not in public_base and "127.0.0.1" not in public_base:
             # Trial accounts reject the inline Twiml parameter ("limited parameter

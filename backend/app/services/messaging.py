@@ -39,17 +39,27 @@ async def send_sms(phone: str, message: str) -> dict:
         logger.info("sms_skipped", reason="Twilio not configured")
         return {"sent": False, "channel": "sms", "reason": "not_configured"}
     try:
-        from twilio.rest import Client
-        def _dispatch():
-            client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
-            return client.messages.create(
-                body=message,
-                from_=settings.twilio_from_phone,
-                to=phone
+        to_phone = phone.strip()
+        if to_phone and not to_phone.startswith("+"):
+            if len(to_phone) == 10:
+                to_phone = "+91" + to_phone
+            elif not to_phone.startswith("+"):
+                to_phone = "+" + to_phone
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"https://api.twilio.com/2010-04-01/Accounts/{settings.twilio_account_sid}/Messages.json",
+                auth=(settings.twilio_account_sid, settings.twilio_auth_token),
+                data={
+                    "To": to_phone,
+                    "From": settings.twilio_from_phone,
+                    "Body": message,
+                },
             )
-        msg = await asyncio.to_thread(_dispatch)
-        logger.info("sms_sent_success", to=phone, sid=msg.sid)
-        return {"sent": True, "channel": "sms", "api_call_id": msg.sid}
+            resp.raise_for_status()
+            data = resp.json()
+            logger.info("sms_sent_success", to=to_phone, sid=data.get("sid"))
+            return {"sent": True, "channel": "sms", "api_call_id": data.get("sid", "")}
     except Exception as e:
         logger.error("sms_error", error=str(e))
         return {"sent": False, "channel": "sms", "reason": str(e)}

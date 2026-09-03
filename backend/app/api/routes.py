@@ -1824,7 +1824,7 @@ Accounts Receivable — RecoverIQ Pro
         inv.last_reminder_at = now
 
         voice_lang = cust.language if cust and cust.language else "te"
-        voice_script = f"Namaste {cust_name} gaaru, this is an urgent credit recovery call from RecoverIQ Pro. Your B2B Invoice #{inv.invoice_number} for ₹{inv.outstanding_amount:,.2f} is now 8 days overdue. Please process payment immediately using the payment link sent to your email and phone: {payment_link}. Thank you."
+        voice_script = f"Namaste {cust_name} gaaru, this is an urgent credit recovery call from RecoverIQ Pro. Your B2B Invoice #{inv.invoice_number} for ₹{inv.outstanding_amount:,.2f} is now 8 days overdue. Please process payment immediately using the payment link sent to your email and SMS. Thank you."
 
         v_res = await voice_service.generate_voice(voice_script, voice_lang)
         tw_res = await voice_service.make_twilio_call(cust_phone, voice_script, voice_lang) if cust_phone else {"called": False}
@@ -1853,21 +1853,28 @@ Voice Call Script:
 Best regards,
 Executive Credit Control — RecoverIQ Pro
 """
-        email_res = await send_email(cust_email, subject, body)
+        email_res = await send_email(cust_email, subject, body) if cust_email else {"sent": False}
+        
+        sms_text = f"RecoverIQ Urgent Alert: Invoice #{inv.invoice_number} (₹{inv.outstanding_amount:,.2f}) is 8+ days overdue. Pay immediately: {payment_link}"
+        sms_res = await send_sms(cust_phone, sms_text) if cust_phone else {"sent": False}
+
         if tw_res.get("called"):
             call_status = f"Twilio Call Placed to {cust_phone} (SID {str(tw_res.get('call_sid', ''))[:14]})"
         else:
             reason = str(tw_res.get("reason") or "unknown error")
             short_reason = str(tw_res.get("hint")) if tw_res.get("hint") else (reason[:150] + ("..." if len(reason) > 150 else ""))
             call_status = f"Voice Call FAILED — {short_reason}"
-        msg = f"Stage 7 Triggered: 8+ Days Overdue AI Voice Call ({call_status}) to {cust_phone} & Critical Email sent to {cust_email} (Sent: {email_res.get('sent', False)})"
+
+        msg = f"Stage 7 Triggered: 8+ Days Overdue AI Voice Call ({call_status}), SMS to {cust_phone} (SMS Sent: {sms_res.get('sent', False)}), & Critical Email sent to {cust_email} (Email Sent: {email_res.get('sent', False)})"
+        
         await audit(db, None, "executor", "VOICE_FOLLOWUP_INITIATED", {
             "invoice_id": inv.id,
             "phone": cust_phone,
             "call_sid": tw_res.get("call_sid", ""),
             "voice_call_id": vc.id,
             "script": voice_script,
-            "email_sent": email_res.get("sent")
+            "email_sent": email_res.get("sent"),
+            "sms_sent": sms_res.get("sent")
         })
         await broadcast("call.generated", {"id": vc.id, "customer": cust_name, "phone": cust_phone, "invoice": inv.invoice_number})
 

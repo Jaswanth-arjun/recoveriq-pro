@@ -8,7 +8,7 @@ from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Request, Response, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -627,15 +627,14 @@ async def trigger_subscription_24h_voice_call(sub_id: int, db: AsyncSession = De
         raise HTTPException(404, "Customer not found")
 
     script = (
-        f"Namaste {cust.name} gaaru! Direct follow-up call from GreenBasket Customer Success. "
-        f"Mee monthly milk and fresh grocery subscription auto-payment 24 hours kritham fail aindi. "
-        f"Mee daily morning 6 AM fresh delivery miss avvakundaa undadaniki, "
-        f"payment cheyyadaniki meeku SMS mariyu Email lo payment link pampamu — "
-        f"daya chesi mee SMS mariyu Email check chesi, aa link tho payment complete cheyandi. Dhanyavaadalu!"
+        f"Hello {cust.name}, this is a direct follow-up call from GreenBasket Customer Success. "
+        f"Your monthly milk and fresh grocery subscription auto-payment failed 24 hours ago. "
+        f"To keep your daily 6 AM fresh delivery active, we have sent you a secure payment link "
+        f"via SMS and Email. Please check your messages and complete the payment. Thank you!"
     )
 
-    call_res = await make_twilio_call(cust.phone, script, language="te")
-    voice_res = await generate_voice(script, language="te")
+    call_res = await voice_service.make_twilio_call(cust.phone, script, language="te")
+    voice_res = await voice_service.generate_voice(script, language="te")
 
     await broadcast("voice.call_triggered", {
         "subscription_id": sub_id,
@@ -2030,7 +2029,7 @@ Accounts Receivable — RecoverIQ Pro
         inv.last_reminder_at = now
 
         voice_lang = cust.language if cust and cust.language else "te"
-        voice_script = f"Namaste {cust_name} gaaru, this is an urgent credit recovery call from RecoverIQ Pro. Your B2B Invoice #{inv.invoice_number} for ₹{inv.outstanding_amount:,.2f} is now 8 days overdue. Payment cheyyadaniki meeku SMS mariyu Email lo payment link pampamu — daya chesi mee SMS mariyu Email check chesi, aa link tho payment process cheyandi immediately. Thank you."
+        voice_script = f"Hello {cust_name}, this is an urgent credit recovery call from RecoverIQ Pro. Your B2B Invoice #{inv.invoice_number} for ₹{inv.outstanding_amount:,.2f} is now 8 days overdue. We have sent you the payment link via SMS and Email — please check your messages and process the payment immediately. Thank you."
 
         v_res = await voice_service.generate_voice(voice_script, voice_lang)
         tw_res = await voice_service.make_twilio_call(cust_phone, voice_script, voice_lang) if cust_phone else {"called": False}
@@ -2399,6 +2398,25 @@ async def update_promise_status(promise_id: int, body: dict, db: AsyncSession = 
         await db.commit()
         await broadcast("promise.updated", {"id": p.id, "status": new_status})
     return {"ok": True, "id": p.id, "status": p.status}
+
+
+@router.delete("/promise-to-pay/{promise_id}")
+async def delete_promise(promise_id: int, db: AsyncSession = Depends(get_db)):
+    p = await db.get(PromiseToPay, promise_id)
+    if not p:
+        raise HTTPException(404, "Promise not found")
+    await db.delete(p)
+    await db.commit()
+    await broadcast("promise.updated", {"id": promise_id, "deleted": True})
+    return {"ok": True, "id": promise_id}
+
+
+@router.delete("/promise-to-pay")
+async def clear_all_promises(db: AsyncSession = Depends(get_db)):
+    await db.execute(delete(PromiseToPay))
+    await db.commit()
+    await broadcast("promise.updated", {"cleared": True})
+    return {"ok": True, "message": "All promises cleared"}
 
 
 # ---------------------------------------------------------------- AUTOMATIC CHECKOUT ABANDONMENT

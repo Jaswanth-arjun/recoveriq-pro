@@ -81,14 +81,13 @@ async def fire_scheduled_voice_call(ctx, sub_id: int, error_code: str = "", erro
             return
 
         script = (
-            f"Namaste {cust.name} gaaru! This is an automated follow-up call from GreenBasket Customer Success. "
-            f"Mee monthly fresh grocery subscription auto-pay "
+            f"Hello {cust.name}, this is an automated follow-up call from GreenBasket Customer Success. "
+            f"Your monthly fresh grocery subscription auto-pay "
             + (f"({error_title or error_code}) " if (error_title or error_code) else "")
-            + f"ani 24 hours kritham fail aindi. "
-            f"Payment cheyyadaniki meeku SMS mariyu Email lo payment link pampamu — "
-            f"mee daily morning 6 AM fresh delivery continue cheyyadaniki, "
-            f"daya chesi mee SMS mariyu Email check chesi, aa link tho payment complete cheyandi. "
-            f"Idhi automated reminder call. Dhanyavaadalu!"
+            + f"failed 24 hours ago. "
+            f"To keep your daily 6 AM fresh delivery active, we have sent you a secure payment link "
+            f"via SMS and Email. Please check your messages and complete the payment. "
+            f"This is an automated reminder call. Thank you!"
         )
         call_res = await make_twilio_call(cust.phone, script, language="te")
         await audit(db, None, "executor", "SCHEDULED_VOICE_CALL_FIRED", {
@@ -389,6 +388,48 @@ async def process_b2b_receivables_worker_task(db) -> list:
     return processed
 
 
+async def sync_paid_links_task(db) -> int:
+    """Polling fallback for the payment_link.paid webhook. Razorpay webhooks
+    require public dashboard configuration; this polls the live link status
+    via API instead, so recovery works even without webhooks. Returns count
+    of newly recovered events."""
+    from app.models import Action, FailureEvent
+    from app.services import razorpay as rzp
+
+    res = await db.execute(
+        select(Action.failure_event_id)
+        .join(FailureEvent, FailureEvent.id == Action.failure_event_id)
+        .where(
+            FailureEvent.status.notin_(("recovered", "stopped")),
+            Action.resource_id.like("plink_%"),
+        )
+        .distinct()
+        .order_by(Action.failure_event_id.desc())
+        .limit(25)
+    )
+    event_ids = [r[0] for r in res.all()]
+    recovered = 0
+    for ev_id in event_ids:
+        # newest link action for this event
+        res_a = await db.execute(
+            select(Action).where(Action.failure_event_id == ev_id,
+                                 Action.resource_id.like("plink_%"))
+            .order_by(Action.id.desc()).limit(1))
+        action = res_a.scalars().first()
+        if not action:
+            continue
+        try:
+            info = rzp.fetch_payment_link_status(action.resource_id)
+        except Exception:
+            continue  # Razorpay unreachable — retry next cycle
+        if info.get("status") == "paid":
+            await mark_recovered(db, ev_id,
+                                 info.get("payment_id") or action.resource_id,
+                                 recovered_via="payment_link.paid")
+            recovered += 1
+    return recovered
+
+
 async def run_all_background_tasks():
     """Runs all background closed-loop tasks synchronously within a DB session."""
     async with SessionLocal() as db:
@@ -396,7 +437,7 @@ async def run_all_background_tasks():
             await check_broken_promises_task(db)
             await process_b2b_aging_task(db)
             await process_b2b_receivables_worker_task(db)
-            # Payment degradation anomaly feature removed
+            await sync_paid_links_task(db)
         except Exception as e:
             print(f"[BACKGROUND TASK ERROR] {e}")
 

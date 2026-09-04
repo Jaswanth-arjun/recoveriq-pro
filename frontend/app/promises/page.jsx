@@ -64,15 +64,22 @@ export default function PromisesPage() {
     }
   };
 
-  const handleStatusUpdate = async (id, status) => {
+  const handleDeletePromise = async (id) => {
     try {
-      await api(`/promise-to-pay/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status }),
-      });
+      await api(`/promise-to-pay/${id}`, { method: "DELETE" });
       loadData();
     } catch (err) {
-      alert(err.message || "Failed to update promise status");
+      alert(err.message || "Failed to delete promise");
+    }
+  };
+
+  const handleClearAllPromises = async () => {
+    if (!confirm("Are you sure you want to clear all payment promises?")) return;
+    try {
+      await api("/promise-to-pay", { method: "DELETE" });
+      loadData();
+    } catch (err) {
+      alert(err.message || "Failed to clear promises");
     }
   };
 
@@ -89,15 +96,25 @@ export default function PromisesPage() {
             Manage customer payment commitments, automated due date enforcement, and broken promise recovery.
           </p>
         </div>
-        <button
-          onClick={() => {
-            setErrorMsg("");
-            setShowModal(true);
-          }}
-          className="rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-2 text-sm transition-all shadow-md shadow-emerald-500/20"
-        >
-          + Record Payment Promise
-        </button>
+        <div className="flex items-center gap-2">
+          {promises.length > 0 && (
+            <button
+              onClick={handleClearAllPromises}
+              className="rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 px-3 py-2 text-xs font-semibold transition-all"
+            >
+              Clear All Records
+            </button>
+          )}
+          <button
+            onClick={() => {
+              setErrorMsg("");
+              setShowModal(true);
+            }}
+            className="rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-2 text-sm transition-all shadow-md shadow-emerald-500/20"
+          >
+            + Record Payment Promise
+          </button>
+        </div>
       </div>
 
       {/* Metric Cards */}
@@ -200,22 +217,31 @@ export default function PromisesPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      {p.status === "PROMISED" && (
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleStatusUpdate(p.id, "PAID")}
-                            className="rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 px-2 py-1 text-[10px] font-semibold"
-                          >
-                            Mark Paid
-                          </button>
-                          <button
-                            onClick={() => handleStatusUpdate(p.id, "BROKEN")}
-                            className="rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 px-2 py-1 text-[10px] font-semibold"
-                          >
-                            Mark Broken
-                          </button>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {p.status === "PROMISED" && (
+                          <>
+                            <button
+                              onClick={() => handleStatusUpdate(p.id, "PAID")}
+                              className="rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 px-2 py-1 text-[10px] font-semibold"
+                            >
+                              Mark Paid
+                            </button>
+                            <button
+                              onClick={() => handleStatusUpdate(p.id, "BROKEN")}
+                              className="rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 px-2 py-1 text-[10px] font-semibold"
+                            >
+                              Mark Broken
+                            </button>
+                          </>
+                        )}
+                        <button
+                          onClick={() => handleDeletePromise(p.id)}
+                          className="rounded bg-slate-800 hover:bg-rose-900/50 text-slate-400 hover:text-rose-300 border border-slate-700 hover:border-rose-500/50 px-2 py-1 text-[10px] font-semibold transition-colors"
+                          title="Delete Record"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))

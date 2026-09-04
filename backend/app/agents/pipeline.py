@@ -271,12 +271,12 @@ async def execute(db: AsyncSession, event: FailureEvent, decision: Decision) -> 
                 is_shopping_abandonment = event.event_type == "checkout.abandoned"
                 if customer.phone and settings.twilio_ready and not is_shopping_abandonment and amount_inr > 10_000:
                     voice_script = (
-                        f"Namaste {customer.name} gaaru! This is an automated call from GreenBasket Customer Success. "
-                        f"Mee {category.replace('_', ' ')} valla payment of {int(amount_inr)} rupees fail ayyindi. "
-                        f"Meeru maatramey mukhyam! "
-                        f"Payment cheyyadaniki meeku SMS mariyu Email lo payment link pampamu — "
-                        f"daya chesi mee SMS mariyu Email check chesi, aa link tho payment complete cheyandi. "
-                        f"Mee daily deliveries continue cheyyadaniki idhi chala avasaram. Dhanyavaadalu!"
+                        f"Hello {customer.name}, this is an automated call from GreenBasket Customer Success. "
+                        f"Your payment of {int(amount_inr)} rupees could not be processed due to a "
+                        f"{category.replace('_', ' ')} issue. "
+                        f"We have sent you a secure payment link via SMS and Email. "
+                        f"Please check your messages and complete the payment to keep your daily deliveries active. "
+                        f"Thank you!"
                     )
                     twilio_call = await voice_service.make_twilio_call(
                         customer.phone, voice_script, customer.language
@@ -307,12 +307,11 @@ async def execute(db: AsyncSession, event: FailureEvent, decision: Decision) -> 
             # AI voice agent calls ONLY for order values above ₹10,000 —
             # below that, SMS + Email outreach is sufficient.
             script = (
-                f"Namaste {customer.name if customer else 'customer'} gaaru! "
-                f"This is an automated call from GreenBasket Customer Success. "
-                f"Mee payment of {int(amount_inr)} rupees fail ayyindi. "
-                f"Payment cheyyadaniki meeku SMS mariyu Email lo payment link pampamu — "
-                f"daya chesi mee SMS mariyu Email check chesi, aa link tho payment complete cheyandi. "
-                f"Dhanyavaadalu."
+                f"Hello {customer.name if customer else 'customer'}, this is an automated call "
+                f"from GreenBasket Customer Success. "
+                f"Your payment of {int(amount_inr)} rupees could not be processed. "
+                f"We have sent you a secure payment link via SMS and Email. "
+                f"Please check your messages and complete the payment. Thank you."
             )
             audio = await voice_service.generate_voice(script, customer.language if customer else "te")
             vc = VoiceCall(failure_event_id=event.id, script=script,
@@ -398,7 +397,8 @@ async def run_pipeline(db: AsyncSession, event: FailureEvent, skip_gate: bool = 
 
 async def mark_recovered(db: AsyncSession, event_id: int,
                          razorpay_payment_id: str, recovered_via: str):
-    """⑥ OUTCOME MONITOR — payment_link.paid / order.paid → RECOVERED."""
+    """⑥ OUTCOME MONITOR — payment_link.paid / order.paid → RECOVERED.
+    Also flips a related subscription (auto-pay failure recovery) back to PAID."""
     event = await db.get(FailureEvent, event_id)
     if not event or event.status == "recovered":
         return
@@ -412,10 +412,23 @@ async def mark_recovered(db: AsyncSession, event_id: int,
                    recovered_via=recovered_via,
                    razorpay_payment_id=razorpay_payment_id))
     event.status = "recovered"
+
+    # If this failure came from a subscription auto-pay failure, restore the
+    # subscription to PAID so the merchant dashboard reflects the recovery.
+    sub_code = (event.raw_payload or {}).get("subscription_code", "")
+    if sub_code:
+        from app.models import Subscription
+        res = await db.execute(
+            select(Subscription).where(Subscription.subscription_code == sub_code))
+        sub = res.scalars().first()
+        if sub and sub.status != "PAID":
+            sub.status = "PAID"
+
     await db.commit()
     await audit(db, event_id, "outcome", "RECOVERED", {
         "amount_inr": recovered_paise / 100, "via": recovered_via,
         "razorpay_payment_id": razorpay_payment_id, "time_to_recovery_s": tt,
+        "subscription_restored": bool(sub_code),
     })
     await broadcast("recovered", {"id": event_id,
                                   "amount_inr": recovered_paise / 100,

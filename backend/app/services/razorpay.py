@@ -61,6 +61,21 @@ def create_payment_link(amount_paise: int, customer: dict, description: str, ref
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry=retry_if_exception_type((ConnectionError, TimeoutError, RazorpayUnavailable)),
 )
+def fetch_payment_link_status(link_id: str) -> dict:
+    """Fetch a payment link's live status from Razorpay ("created"|"paid"|...)."""
+    client = _client()
+    try:
+        link = client.payment_link.fetch(link_id)
+        payments = link.get("payments") or []
+        payment_id = ""
+        if isinstance(payments, list) and payments:
+            payment_id = payments[-1].get("payment_id", "") or payments[-1].get("id", "")
+        return {"status": link.get("status", ""), "payment_id": payment_id,
+                "api_call_id": link.get("id", "")}
+    except Exception as e:
+        raise RazorpayUnavailable(str(e)) from e
+
+
 def retry_subscription(subscription_id: str, ref_id: str) -> dict:
     """Real Subscriptions API retry (charge attempt)."""
     client = _client()

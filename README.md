@@ -1,18 +1,22 @@
 <div align="center">
 
 # 🏆 RecoverIQ Pro
-### Autonomous AI Revenue Recovery Agent · Razorpay Buildathon (Track 03)
+### Autonomous AI Revenue Recovery Agent · Gnani AI — Great Indian AI Internship Challenge
 
 **"The LLM thinks. Code acts. Every rupee has a receipt."**
 
-[![Razorpay](https://img.shields.io/badge/Razorpay-Buildathon%20Track%2003-0C2451?style=for-the-badge&logo=razorpay&logoColor=white)](https://razorpay.com)
+[![Gnani AI](https://img.shields.io/badge/Gnani%20AI-Timbre%20TTS%20%2B%20Prisma%20STT-6E3AFF?style=for-the-badge)](https://www.gnani.ai/)
+[![Challenge](https://img.shields.io/badge/Great%20Indian%20AI-Internship%20Challenge-FF6B35?style=for-the-badge)](https://www.gnani.ai/)
+[![Razorpay](https://img.shields.io/badge/Payments-Razorpay%20Test%20Mode-0C2451?style=for-the-badge&logo=razorpay&logoColor=white)](https://razorpay.com)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Next.js](https://img.shields.io/badge/Next.js-14_App_Router-black?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16_Database-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgresql.org)
 [![Docker](https://img.shields.io/badge/Docker-Compose_Enabled-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
 [![Redis](https://img.shields.io/badge/Redis-7_arq_Worker-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io)
 
-[🚀 Quick Start](#-quick-start-one-command) • [🤖 7-Agent Pipeline](#-the-7-agent-autonomous-pipeline) • [📊 Track 03 Matrix](#-track-03-requirements--100-coverage) • [🔌 API Reference](#-api-reference-categorized)
+`#GnaniAI` · `#GreatIndianAIInternshipChallenge`
+
+[📋 Challenge Submission](#-gnani-ai-challenge-submission) • [🚀 Quick Start](#-quick-start-one-command) • [🤖 7-Agent Pipeline](#-the-7-agent-autonomous-pipeline) • [🎙️ Gnani Integration](#-gnani-ai-integration--models-used) • [🔌 API Reference](#-api-reference-categorized)
 
 </div>
 
@@ -20,29 +24,123 @@
 
 ## 📖 Table of Contents
 
-1. [Executive Summary & Core Concept](#-executive-summary--core-concept)
-2. [Why Judges Should Care (The Bar)](#-why-judges-should-care-the-bar)
-3. [Track 03 Requirements — 100% Requirement Matrix](#-track-03-requirements--100-requirement-matrix)
-4. [System Architecture](#-system-architecture)
-5. [The 7-Agent Autonomous Pipeline](#-the-7-agent-autonomous-pipeline)
-6. [The Fixed Action Contracts (Set A–G)](#-the-fixed-action-contracts-set-ag)
-7. [Deterministic Policy Guard — Hard-Coded Compliance Rules](#-deterministic-policy-guard--hard-coded-compliance-rules)
-8. [End-to-End Feature Deep Dives](#-end-to-end-feature-deep-dives)
-   - [1. GreenBasket Storefront & Intent-Driven Abandonment Tracking](#1-greenbasket-storefront--intent-driven-abandonment-tracking)
-   - [2. Subscription Mandate Auto-Pay Failure Engine (7 Risk Codes)](#2-subscription-mandate-auto-pay-failure-engine-7-risk-codes)
-   - [3. B2B Receivables Chaser & 7-Stage Escalation Ladder](#3-b2b-receivables-chaser--7-stage-escalation-ladder)
-   - [4. Self-Service Promise-to-Pay (P2P) Portal](#4-self-service-promise-to-pay-p2p-portal)
-   - [5. Telephony Engine & AI Voice Caller (Telugu / Hinglish / English)](#5-telephony-engine--ai-voice-caller-telugu--hinglish--english)
-   - [6. Multi-Channel Messaging & Itemized WhatsApp Greetings](#6-multi-channel-messaging--itemized-whatsapp-greetings)
-   - [7. Embedded AI Copilot Assistant](#7-embedded-ai-copilot-assistant)
-9. [Multi-Channel Communication Audit (Real vs Simulated)](#-multi-channel-communication-audit-real-vs-simulated)
-10. [Graceful Degradation & Honesty Architecture](#-graceful-degradation--honesty-architecture)
-11. [Key UI Pages Map](#-key-ui-pages-map)
-12. [Database Schema & 19 Tables Map](#-database-schema--19-tables-map)
-13. [API Reference (Categorized)](#-api-reference-categorized)
-14. [Production Design Decisions & Trade-offs](#-production-design-decisions--trade-offs)
-15. [Quick Start (One Command)](#-quick-start-one-command)
-16. [Troubleshooting & FAQs](#-troubleshooting--faqs)
+1. [Gnani AI Challenge Submission](#-gnani-ai-challenge-submission)
+2. [Executive Summary & Core Concept](#-executive-summary--core-concept)
+3. [Why This Matters (The Product Bar)](#-why-this-matters-the-product-bar)
+4. [Gnani AI Integration & Models Used](#-gnani-ai-integration--models-used)
+5. [Capability Matrix — Revenue Recovery Coverage](#-capability-matrix--revenue-recovery-coverage)
+6. [System Architecture](#-system-architecture)
+7. [The 7-Agent Autonomous Pipeline](#-the-7-agent-autonomous-pipeline)
+8. [The Fixed Action Contracts (Set A–G)](#-the-fixed-action-contracts-set-ag)
+9. [Deterministic Policy Guard — Hard-Coded Compliance Rules](#-deterministic-policy-guard--hard-coded-compliance-rules)
+10. [End-to-End Feature Deep Dives](#-end-to-end-feature-deep-dives)
+    - [1. GreenBasket Storefront & Intent-Driven Abandonment Tracking](#1-greenbasket-storefront--intent-driven-abandonment-tracking)
+    - [2. Subscription Mandate Auto-Pay Failure Engine (7 Risk Codes)](#2-subscription-mandate-auto-pay-failure-engine-7-risk-codes)
+    - [3. B2B Receivables Chaser & 7-Stage Escalation Ladder](#3-b2b-receivables-chaser--7-stage-escalation-ladder)
+    - [4. Self-Service Promise-to-Pay (P2P) Portal](#4-self-service-promise-to-pay-p2p-portal)
+    - [5. Telephony Engine & AI Voice Caller (Telugu / Hinglish / English)](#5-telephony-engine--ai-voice-caller-telugu--hinglish--english)
+    - [6. Multi-Channel Messaging & Itemized WhatsApp Greetings](#6-multi-channel-messaging--itemized-whatsapp-greetings)
+    - [7. Embedded AI Copilot Assistant](#7-embedded-ai-copilot-assistant)
+11. [Multi-Channel Communication Audit (Real vs Simulated)](#-multi-channel-communication-audit-real-vs-simulated)
+12. [Graceful Degradation & Honesty Architecture](#-graceful-degradation--honesty-architecture)
+13. [Key UI Pages Map](#-key-ui-pages-map)
+14. [Database Schema & 19 Tables Map](#-database-schema--19-tables-map)
+15. [API Reference (Categorized)](#-api-reference-categorized)
+16. [Production Design Decisions & Trade-offs](#-production-design-decisions--trade-offs)
+17. [Quick Start (One Command)](#-quick-start-one-command)
+18. [Troubleshooting & FAQs](#-troubleshooting--faqs)
+19. [Challenge Submission Checklist](#-challenge-submission-checklist)
+
+---
+
+## 🏅 Gnani AI Challenge Submission
+
+> **Challenge:** Great Indian AI Internship Challenge — build a working application using Gnani AI's models and/or APIs to solve a practical need for enterprises, developers, or creators.
+>
+> **Deadline:** November 10, 2026 (final, no extensions).
+>
+> **Submission hashtags:** `#GnaniAI` `#GreatIndianAIInternshipChallenge`
+>
+> **Official Gnani AI accounts tagged:** [gnani.ai on LinkedIn](https://www.linkedin.com/company/gnani-ai) · [@GnaniAi on X](https://x.com/GnaniAi)
+
+### Submission links
+
+| Required item | Link / location |
+|---|---|
+| 💻 Public GitHub repository | [github.com/Jaswanth-arjun/recoveriq-pro](https://github.com/Jaswanth-arjun/recoveriq-pro) |
+| 🎥 Public demo video | _Add your public LinkedIn/X video URL here before submitting_ |
+| 📝 Written project explanation | This README (problem, solution, users, Gnani models, contributions) |
+| 🤖 Gnani AI models / APIs used | [`Timbre v2.5`](#gnani-ai-models--apis-used) (TTS) + [`Prisma v3.0`](#gnani-ai-models--apis-used) (STT) |
+| 💼 Nominated LinkedIn post | _Add your public LinkedIn post URL here_ |
+| 𝕏 Nominated X post | _Add your public X post URL here_ |
+
+### The problem
+
+Indian businesses lose revenue silently through failed payments, abandoned checkouts, failed subscription mandates, and overdue B2B invoices. Recovery is still largely manual, generic, and English-only, even when the customer speaks Telugu, Hindi, or Hinglish. Generic voice bots make this worse: they mispronounce Indian names and amounts, cannot switch languages naturally, and leave no reliable transcript for audit or compliance.
+
+### The solution
+
+**RecoverIQ Pro** is an autonomous revenue-recovery platform for Indian merchants. It closes the loop from detection to measured recovery:
+
+```
+DETECT → DIAGNOSE → DECIDE → POLICY GATE → ACT → RECOVER → AUDIT
+```
+
+* **Detect** payment failures, abandoned checkouts, mandate failures, and overdue invoices.
+* **Diagnose** the root cause using a 50+ error-code rule map plus an LLM second opinion.
+* **Decide** on exactly one action from fixed, strongly-typed contracts (Set A–G).
+* **Gate** every action through a deterministic policy engine (retries, quiet hours, opt-outs, value thresholds).
+* **Act** through Razorpay payment links, Twilio SMS/WhatsApp/voice, Resend email, and **Gnani AI speech**.
+* **Recover** only when a Razorpay webhook confirms real money received.
+* **Audit** every recommendation, policy check, and external API call in an append-only log.
+
+**Gnani AI is the voice layer of the product.** Gnani Timbre speaks to customers in their own language, and Gnani Prisma turns call recordings into searchable transcripts with automatic Indian-language detection.
+
+### Gnani AI models & APIs used
+
+| Gnani AI model / API | Version | Role in RecoverIQ Pro | Implementation |
+|---|---|---|---|
+| **Timbre — Text-to-Speech** | `timbre-v2.5` | Synthesises real Telugu, Hindi, Hinglish, and English recovery calls. Twilio plays the generated MP3 during a live call. | `backend/app/services/gnani.py` → `POST https://api.vachana.ai/api/v1/tts/inference` |
+| **Prisma — Speech-to-Text** | `prisma-v3.0` | Transcribes call recordings and auto-detects the spoken Indian language for audit and follow-up. | `backend/app/services/gnani.py` → `POST https://api.vachana.ai/stt/v3` |
+
+**Authentication:** every Gnani request uses the `X-API-Key-ID` header.
+
+**Default Timbre v2.5 voices:**
+
+| Customer language | Gnani locale | Voice |
+|---|---|---|
+| Telugu | `te-IN` | Suhana |
+| Hindi | `hi-IN` | Nalini |
+| Hinglish (code-mixed) | `hi-en` | Poorvi |
+| English (India) | `en-IN` | Kaveri |
+
+**Production details that make the voice layer usable:**
+
+* **Spoken Indian amounts:** `₹1,50,000` is converted to *"one lakh fifty thousand rupees"* before synthesis, following Gnani's input-formatting guidance, so amounts are not mispronounced.
+* **Self-hosted TwiML:** Twilio fetches `/api/twiml/voice`, which returns a `<Play>` pointing at `/api/twiml/audio`; that endpoint streams Gnani-generated audio. If Gnani is unavailable, the call falls back to Twilio `<Say>` instead of failing.
+* **In-process audio cache:** repeated scripts (retries, webhook replays) do not re-synthesise the same audio.
+* **Honest status reporting:** `GET /api/system/status` returns the live provider, TTS model, and STT model.
+
+> **A note on Evon:** Gnani Evon v3.3 (30B MoE, Hugging Face) was evaluated but is **not used in this build**. At submission time its hosted Gnani API was in closed beta, and self-hosting the 60 GB BF16 weights requires H100/H200-class GPUs. The reasoning layer continues to use the existing LLM plus a deterministic rule map. This README does not claim Evon usage.
+
+### Who will use it
+
+| User | Why they need it |
+|---|---|
+| **Razorpay merchants / D2C brands** | Recover failed payments and abandoned carts without hiring a manual calling team. |
+| **Subscription businesses** | Recover failed mandates with retries and local-language voice follow-ups. |
+| **B2B finance and receivables teams** | Automate staged overdue reminders and Promise-to-Pay collection. |
+| **Recovery operations / agencies** | Run multilingual outreach with a complete, immutable audit trail. |
+| **Indian end customers** | Receive a call they can actually understand, in Telugu, Hindi, Hinglish, or English. |
+| **Developers** | Reuse `backend/app/services/gnani.py` as a small, working Gnani TTS/STT integration. |
+
+### Team contributions
+
+| Member | Contribution |
+|---|---|
+| **Jaswanth Arjun** (solo participant) | Product design, FastAPI backend, Next.js dashboard, Razorpay integration, agent pipeline, deterministic policy guard, database schema, Gnani Timbre/Prisma integration, Twilio telephony, testing, documentation, and demo. |
+
+> If the submission is converted to a team entry, replace this table with each member's name and the specific modules they owned. Do not submit a team entry with a single combined credit.
 
 ---
 
@@ -77,23 +175,102 @@ Existing recovery tools use simple, rigid, static email blasts that customers ig
 
 ---
 
-## 💡 Why Judges Should Care (The Bar)
+## 💡 Why This Matters (The Product Bar)
 
-RecoverIQ Pro was built from day one to clear and exceed **The Bar** defined in Track 03:
+RecoverIQ Pro is built to clear a strict production bar — real money, real compliance, real auditability, and real Indian-language voice:
 
-| Track 03 Benchmark | 🎯 How RecoverIQ Pro Solves & Exceeds It | Implementation Proof |
+| Product Bar | 🎯 How RecoverIQ Pro Solves & Exceeds It | Implementation Proof |
 |---|---|---|
 | **💰 Money Recovered (Measured)** | Real-time WebSocket financial counters tracking *At Risk ₹*, *Recovered ₹*, and *Recovery Rate %*. Recovery is confirmed exclusively when a Razorpay webhook returns `payment_link.paid`. | `backend/app/services/events.py`<br>`frontend/app/page.jsx` |
 | **⬆️ Escalation (Human-in-the-Loop)** | High-value payments (**> ₹10,000**) or low AI confidence (**< 70%**) are automatically routed to the **Approvals Queue**. No automated action fires until a human merchant approves. | `backend/app/agents/pipeline.py`<br>`frontend/app/approvals/page.jsx` |
 | **🛑 Stopping Rules (Compliance)** | Strictly enforced compliance: Max 3 retries/payment, 48h minimum wait for insufficient funds, 9 PM–9 AM IST quiet hours, customer opt-outs, and immediate `STOP` on fraud/dispute codes. | `backend/app/agents/pipeline.py`<br>`frontend/app/plan/page.jsx` |
-| **🧾 Audit Trail (Explainability)** | Every decision step, policy check, LLM prompt/response, and external API call ID is written to an **append-only PostgreSQL table**. Judges can click any payment on the Timeline page to see its complete history. | `backend/app/models.py`<br>`frontend/app/timeline/page.jsx` |
+| **🧾 Audit Trail (Explainability)** | Every decision step, policy check, LLM prompt/response, and external API call ID is written to an **append-only PostgreSQL table**. Merchants and auditors can click any payment on the Timeline page to see its complete history. | `backend/app/models.py`<br>`frontend/app/timeline/page.jsx` |
 | **🤖 Autonomous Agentic Behavior** | 7 specialized agents operating in an asynchronous pipeline with background retry workers (arq + Redis) and real AI telephony in Telugu/Hinglish. | `backend/app/worker.py`<br>`backend/app/services/gnani.py`<br>`backend/app/services/voice.py` |
 
 ---
 
-## ✅ Track 03 Requirements — 100% Requirement Matrix
+## 🎙️ Gnani AI Integration & Models Used
 
-| # | Razorpay Requirement | RecoverIQ Pro Solution | Target Code / Route | UI Location |
+RecoverIQ Pro treats speech as a first-class recovery channel, not a demo add-on. The integration lives in one small service (`backend/app/services/gnani.py`) and is called by the agent pipeline, the background worker, the TwiML endpoints, and the Call Console.
+
+### Request flow for a live recovery call
+
+```
+arq worker / agent pipeline
+        │  script + customer language
+        ▼
+backend/app/services/voice.py
+        │  provider = gnani
+        ▼
+backend/app/services/gnani.py ──► POST https://api.vachana.ai/api/v1/tts/inference
+        │                          X-API-Key-ID: <GNANI_API_KEY>
+        │                          model: timbre-v2.5
+        │                          voice: Suhana / Nalini / Poorvi / Kaveri
+        ▼
+Twilio Programmable Voice
+        │  fetches GET /api/twiml/voice
+        ▼
+<Response><Play>/api/twiml/audio?...</Play></Response>
+        │
+        ▼
+Customer hears Gnani Timbre in Telugu / Hindi / Hinglish / English
+        │
+        ▼
+Call recording ──► POST /api/voice/transcribe ──► Gnani Prisma v3.0
+                                                  (transcript + detected language)
+```
+
+### Text-to-Speech (Timbre v2.5)
+
+```python
+payload = {
+    "text": script,
+    "voice": "Suhana",          # per-language default
+    "model": "timbre-v2.5",
+    "language": "te-IN",
+    "speed": 1.0,
+    "audio_config": {
+        "sample_rate": 22050,
+        "num_channels": 1,
+        "container": "mp3",
+        "bitrate": "128k",
+    },
+}
+```
+
+* **Language mapping:** the app stores short codes (`te`, `hi`, `en`, `hi-en`) and maps them to Gnani locales (`te-IN`, `hi-IN`, `en-IN`, `hi-en`).
+* **Voice selection:** per-language defaults, with an optional `GNANI_TTS_VOICE` override.
+* **Cache:** a 32-entry in-process cache keyed by `(text, language, model, voice)` avoids duplicate synthesis on retries.
+
+### Speech-to-Text (Prisma v3.0)
+
+`POST /api/voice/transcribe` accepts base64 audio from the dashboard or worker and forwards it to Gnani's `/stt/v3` endpoint with `model=prisma-v3.0` and `language_code=indic-auto`. Prisma returns the transcript plus `detected_language_code`, which is stored for audit and follow-up.
+
+### Live verification (submission build)
+
+| Check | Result |
+|---|---|
+| Telugu TTS (`te-IN`, Suhana) | ✅ 177,632-byte MP3 |
+| Hinglish TTS (`hi-en`, Poorvi) | ✅ 126,641-byte MP3 |
+| English TTS (`en-IN`, Kaveri) | ✅ 126,641-byte MP3 |
+| TwiML response | ✅ `<Play>https://…/api/twiml/audio?script=…&lang=te-IN</Play>` |
+| Twilio audio endpoint | ✅ `audio/mpeg` with a valid MP3 header |
+| Telugu STT (`prisma-v3.0`, `indic-auto`) | ✅ transcript returned, `detected_language_code: te-IN` |
+| `GET /api/system/status` | ✅ `{"provider":"gnani","model":"timbre-v2.5","stt_model":"prisma-v3.0"}` |
+
+### Failure handling
+
+| Failure | Behaviour |
+|---|---|
+| `GNANI_API_KEY` missing | Call Console marks the call `NOT_CONFIGURED`; Twilio falls back to `<Say>`; no fake audio is stored. |
+| Gnani returns `401` / `402` | The call is marked `TTS ERROR`, the error is logged, and the optional ElevenLabs fallback or Twilio `<Say>` is used. |
+| Gnani timeout / network error | Retried by the normal recovery workflow; the customer still receives SMS/email/WhatsApp outreach. |
+
+---
+
+## ✅ Capability Matrix — Revenue Recovery Coverage
+
+| # | Revenue Recovery Capability | RecoverIQ Pro Solution | Target Code / Route | UI Location |
 |---|---|---|---|---|
 | **1** | **Payment Degradation & Root Cause Diagnosis** | Ingests 50+ real Razorpay error codes (`BAD_REQUEST_PAYMENT_TIMED_OUT`, `INSUFFICIENT_FUNDS`, etc.), maps category, and runs LLM 2nd opinion. | `backend/app/error_codes.py`<br>`POST /api/events` | Dashboard (`/`) & Diagnoses (`/diagnoses`) |
 | **2** | **Checkout Drop-Off & Abandonment Recovery** | GreenBasket storefront captures tab-switch/close signals via `visibilitychange`/`pagehide` beacons, generates Razorpay links, and auto-recovers on order completion. | `frontend/hooks/useAbandonmentTracker.js`<br>`POST /api/checkouts/abandon` | GreenBasket Store (`/store`) & Diagnoses (`/diagnoses`) |
@@ -144,7 +321,7 @@ RecoverIQ Pro is built as a containerized, event-driven microservices system des
 │                               EXTERNAL INTEGRATIONS & SERVICES                              │
 │  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌───────────┐  │
 │  │ Razorpay     │   │ Twilio Voice │   │ Twilio SMS / │   │ Resend Email │   │ Gnani AI  │  │
-│  │ Test Mode API│   │ (TwiML Engine│   │ WhatsApp API │   │ Delivery API │   │ Timbre TTS│  │
+│  │ Test Mode API│   │ (TwiML Engine│   │ WhatsApp API │   │ Delivery API │   │TTS + STT  │  │
 │  └──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘   └───────────┘  │
 └─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -363,10 +540,11 @@ RecoverIQ Pro adheres to strict engineering honesty. We clearly distinguish betw
 | 💳 **Payment Links** | Razorpay Test Mode API | 🟢 **100% REAL** | Real payment links generated; webhook confirmations drive actual state transitions. |
 | 📞 **Voice Calls** | Twilio Programmable Voice + Gnani AI | 🟢 **100% REAL** | Places actual phone calls; Twilio fetches our TwiML, which plays Gnani Timbre neural audio. |
 | 🗣️ **Voice TTS Audio** | Gnani AI Timbre API | 🟢 **100% REAL** | Renders realistic Telugu/Hinglish/Hindi/English audio; ElevenLabs is an optional fallback, and Twilio `<Say>` is the last resort if neither is configured. |
+| 📝 **Call Transcription** | Gnani AI Prisma API | 🟢 **100% REAL** | `prisma-v3.0` transcribes call recordings and auto-detects Indian languages. |
 | ✉️ **Email Outreach** | Resend API + Razorpay Notify | 🟢 **100% REAL** | Transmits actual HTML emails to verified customer email addresses. |
 | 💬 **WhatsApp Messages** | Twilio WhatsApp API | 🟢 **100% REAL** | Delivers real WhatsApp messages (requires customer opt-in session on Twilio Sandbox). |
 | 📱 **SMS Outreach** | Twilio SMS API | 🟡 **REAL / SIMULATED** | Real API call made; Indian DLT template restrictions on trial accounts log graceful notice. |
-| 🧠 **LLM Reasoning** | Claude 3.5 / Gemini 1.5 | 🟢 **100% REAL** | Real API calls for diagnosis & copilot; falls back to rule map if keys are omitted. |
+| 🧠 **LLM Reasoning** | Claude 3.5 / Gemini 1.5 / OpenRouter | 🟢 **100% REAL** | Real API calls for diagnosis & copilot; falls back to rule map if keys are omitted. Gnani Evon is **not** used in this build. |
 
 ---
 
@@ -476,7 +654,8 @@ Below is a highlight of key API endpoints. Access full interactive OpenAPI Swagg
 
 ### Prerequisites:
 * Docker & Docker Compose installed.
-* Razorpay Test Mode API credentials (free at [dashboard.razorpay.com](https://dashboard.razorpay.com)).
+* **Gnani AI API key** — required for Timbre TTS and Prisma STT. Registered challenge participants receive 5,000 programme credits. Get a key at [app.gnani.ai/voice](https://app.gnani.ai/voice).
+* **Razorpay Test Mode keys** — optional; required only for real payment links and webhook-driven recovery. Free at [dashboard.razorpay.com](https://dashboard.razorpay.com).
 
 ### Step 1: Environment Setup
 ```bash
@@ -502,6 +681,33 @@ VOICE_PROVIDER=gnani
 * Get a key at [app.gnani.ai/voice](https://app.gnani.ai/voice), docs at [docs.gnani.ai](https://docs.gnani.ai).
 * Verify the backend sees it: `GET /api/system/status` → `"voice": {"provider": "gnani", "status": "connected"}`.
 * Without a key, the Call Console still works but every call is labelled `NOT_CONFIGURED`; Twilio falls back to `<Say>` for live calls.
+
+### Step 1c: Verify Gnani is live
+
+```bash
+curl http://localhost:8000/api/system/status
+```
+
+Expected voice block:
+
+```json
+{
+  "voice": {
+    "status": "connected",
+    "provider": "gnani",
+    "model": "timbre-v2.5",
+    "stt_model": "prisma-v3.0"
+  }
+}
+```
+
+Generate a sample from the dashboard at `/calls` → **Generate Test Voice**, or directly:
+
+```bash
+curl -X POST http://localhost:8000/api/calls/generate-test \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Namaste! Idi RecoverIQ Pro nundi automated call.","language":"te"}'
+```
 
 ### Step 2: Launch via Docker Compose
 ```bash
@@ -540,10 +746,32 @@ docker compose up --build
 
 ---
 
+## ✅ Challenge Submission Checklist
+
+Official requirements for the **Great Indian AI Internship Challenge**:
+
+- [x] Working application that uses Gnani AI models/APIs — **Timbre v2.5 (TTS)** and **Prisma v3.0 (STT)**
+- [x] Written project explanation — problem, solution, Gnani models, target users, and team contributions
+- [x] Gnani AI models and APIs identified with implementation paths
+- [x] Public GitHub repository with setup instructions
+- [ ] Public demo video recorded on LinkedIn and/or X
+- [ ] Video explains what was built and identifies the Gnani AI technology used
+- [ ] Gnani AI official account tagged — [gnani.ai on LinkedIn](https://www.linkedin.com/company/gnani-ai) / [@GnaniAi on X](https://x.com/GnaniAi)
+- [ ] `#GnaniAI` and `#GreatIndianAIInternshipChallenge` included in the post
+- [ ] One nominated post per platform
+- [ ] Video URL, post URLs, and repository link submitted through the programme page
+- [ ] Submitted before **November 10, 2026** (final, no extensions)
+
+> **Important:** tagging Gnani AI alone does not complete the entry. The demo/video, written explanation, Gnani models used, and the nominated post links must all be submitted through the programme page.
+
+---
+
 <div align="center">
 
 **RecoverIQ Pro** — *The LLM thinks. Code acts. Every rupee has a receipt.* 🧾
 
-Built with ❤️ for the Razorpay Buildathon — Track 03: AI Revenue Recovery
+Built with ❤️ for the **Gnani AI — Great Indian AI Internship Challenge**
+
+`#GnaniAI` · `#GreatIndianAIInternshipChallenge`
 
 </div>

@@ -6,6 +6,7 @@ import { api } from "../../lib/api";
 const LANGS = [
   { value: "en", label: "English (en)" },
   { value: "hi", label: "Hindi (hi)" },
+  { value: "hi-en", label: "Hinglish (hi-en)" },
   { value: "te", label: "Telugu (te)" },
 ];
 
@@ -41,7 +42,11 @@ export default function CallsPage() {
       audioRef.current.pause();
     }
     if (call.simulated) {
-      setNotice("Voice not configured — add ELEVENLABS_API_KEY to enable real TTS");
+      setNotice(
+        call.engine === "error"
+          ? "Gnani TTS failed — check API key/credits and backend logs"
+          : "Voice not configured — add GNANI_API_KEY to enable Gnani Timbre TTS"
+      );
       return;
     }
     setPlayingId(call.id);
@@ -69,14 +74,20 @@ export default function CallsPage() {
     setError(null);
     setNotice(null);
     try {
-      await api("/calls/generate-test", {
+      const created = await api("/calls/generate-test", {
         method: "POST",
         body: JSON.stringify({ text: genText, language: genLang }),
       });
-      setNotice("Test voice generated");
+      const refreshed = await api("/calls");
+      setCalls(Array.isArray(refreshed) ? refreshed : refreshed.calls || refreshed.items || []);
+      setNotice(
+        created?.simulated
+          ? "Gnani voice not configured — add GNANI_API_KEY to .env"
+          : `Gnani voice generated (${created?.engine || "gnani"})`
+      );
     } catch (err) {
       setNotice(
-        "Voice generation happens during VOICE_RECOVERY actions — trigger a high-value failure on the Dashboard"
+        "Voice generation failed — check GNANI_API_KEY and the backend logs"
       );
     } finally {
       setGenBusy(false);
@@ -88,7 +99,7 @@ export default function CallsPage() {
       <div>
         <h1 className="text-2xl font-bold text-white">Call Console</h1>
         <p className="text-sm text-slate-500">
-          AI voice-recovery calls (ElevenLabs TTS)
+          AI voice-recovery calls (Gnani Timbre TTS)
         </p>
       </div>
 
@@ -107,7 +118,7 @@ export default function CallsPage() {
 
       {!loading && calls.length === 0 && (
         <div className="rounded-xl bg-[#111827] border border-slate-800 px-4 py-8 text-sm text-slate-500 text-center">
-          No voice calls yet. Voice calls are generated automatically for high-value (≥ ₹5,000) payment failures.
+          No voice calls yet. Voice calls are generated automatically for high-value (≥ ₹10,000) payment failures.
         </div>
       )}
 
@@ -127,7 +138,7 @@ export default function CallsPage() {
                     : "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
                 }`}
               >
-                {c.simulated ? "NOT_CONFIGURED" : "LIVE"}
+                {c.simulated ? (c.engine === "error" ? "TTS ERROR" : "NOT_CONFIGURED") : "LIVE"}
               </span>
               {c.reason && (
                 <div className="mt-1 flex items-start gap-1 text-[10px] text-amber-300/90">

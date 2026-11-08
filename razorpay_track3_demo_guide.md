@@ -20,7 +20,7 @@ RecoverIQ Pro is an autonomous, 7-Agent revenue recovery system built specifical
 | **4. B2B receivables chaser** | 7-Stage B2B Overdue Invoice Chaser | `B2B Receivables` (`/b2b`) | Escalates from 1-day email → 2-day SMS/WhatsApp → 7-day P2P link → 8+ day AI Voice call. |
 | **5. Promise-to-pay tracker** | Self-Service P2P Portal & Merchant Tracker | `Promises to Pay` (`/p2p`) & Public Portal (`/p2p/[id]`) | Allows overdue B2B clients to select a promise date strictly within 7 days, logging commitments to the dashboard. |
 | **6. Mandate retry sequencer** | Intelligent Policy Guard & Retry Rules | `Recovery Plan` (`/recovery-plan`) | Enforces max 3 retries, 48h delay for `INSUFFICIENT_FUNDS`, 2h for network error, and quiet hours (9 PM – 9 AM IST). |
-| **7. Hinglish/Telugu voice recovery** | AI Voice Agent & Twilio Telephony | `Call Console` (`/call-console`) | Generates multi-lingual voice scripts (Telugu/Hinglish) via ElevenLabs TTS & places live Twilio phone calls. |
+| **7. Hinglish/Telugu voice recovery** | AI Voice Agent & Twilio Telephony | `Call Console` (`/call-console`) | Generates multi-lingual voice scripts (Telugu/Hinglish) via Gnani Timbre TTS & places live Twilio phone calls. |
 | **THE BAR: Money Recovered, Escalation, Stopping Rules, Audit Trail** | Metrics Dashboard, Approvals Queue & Real-time Audit Log | `Dashboard` (`/`), `Approvals` (`/approvals`), `Timeline` (`/timeline`), `Report` (`/report`) | • **Measured Money**: Live stats (At Risk, Recovered, Recovery Rate %)<br>• **Escalation**: High-value (> ₹10,000) or low AI confidence (< 70%) requires manual merchant approval<br>• **Stopping Rules**: Opt-out, max retries, or risk flag stops outreach<br>• **Audit Trail**: Every agent step permanently recorded. |
 
 ---

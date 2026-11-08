@@ -87,7 +87,7 @@ RecoverIQ Pro was built from day one to clear and exceed **The Bar** defined in 
 | **⬆️ Escalation (Human-in-the-Loop)** | High-value payments (**> ₹10,000**) or low AI confidence (**< 70%**) are automatically routed to the **Approvals Queue**. No automated action fires until a human merchant approves. | `backend/app/agents/pipeline.py`<br>`frontend/app/approvals/page.jsx` |
 | **🛑 Stopping Rules (Compliance)** | Strictly enforced compliance: Max 3 retries/payment, 48h minimum wait for insufficient funds, 9 PM–9 AM IST quiet hours, customer opt-outs, and immediate `STOP` on fraud/dispute codes. | `backend/app/agents/pipeline.py`<br>`frontend/app/plan/page.jsx` |
 | **🧾 Audit Trail (Explainability)** | Every decision step, policy check, LLM prompt/response, and external API call ID is written to an **append-only PostgreSQL table**. Judges can click any payment on the Timeline page to see its complete history. | `backend/app/models.py`<br>`frontend/app/timeline/page.jsx` |
-| **🤖 Autonomous Agentic Behavior** | 7 specialized agents operating in an asynchronous pipeline with background retry workers (arq + Redis) and real AI telephony in Telugu/Hinglish. | `backend/app/worker.py`<br>`backend/app/services/voice.py` |
+| **🤖 Autonomous Agentic Behavior** | 7 specialized agents operating in an asynchronous pipeline with background retry workers (arq + Redis) and real AI telephony in Telugu/Hinglish. | `backend/app/worker.py`<br>`backend/app/services/gnani.py`<br>`backend/app/services/voice.py` |
 
 ---
 
@@ -101,7 +101,7 @@ RecoverIQ Pro was built from day one to clear and exceed **The Bar** defined in 
 | **4** | **B2B Receivables Automated Chaser** | 7-stage aging escalation ladder (Pre-due reminder → Overdue notice → SMS/WhatsApp → Promise-to-pay link → Tier-4 AI Voice call). | `backend/app/api/routes.py`<br>`POST /api/receivables/invoices/{id}/simulate-stage` | B2B Receivables (`/receivables`) |
 | **5** | **Promise-to-Pay (P2P) Commitment Tracker** | Customer self-service portal (`/p2p/[id]`) allowing clients to commit to payment within 7 days. Daily worker flags broken promises for auto-recovery. | `backend/app/worker.py`<br>`POST /api/p2p/{id}/submit` | Promises to Pay (`/promises`) |
 | **6** | **Mandate Retry Sequencer** | Intelligent retry delay calculator (+48h for low balance, +2h for network, quiet hours adjustment, retry caps). | `backend/app/agents/pipeline.py`<br>`backend/app/worker.py` | Recovery Plan (`/plan`) |
-| **7** | **Hinglish / Telugu AI Voice Agent** | Self-hosted TwiML engine making real Twilio calls with ElevenLabs TTS audio previews in Telugu and Hinglish for high-value orders (> ₹10,000). | `backend/app/services/voice.py`<br>`GET /api/twiml/voice` | Call Console (`/calls`) |
+| **7** | **Hinglish / Telugu AI Voice Agent** | Self-hosted TwiML engine making real Twilio calls powered by **Gnani Timbre TTS** (Telugu, Hinglish, Hindi, English) for high-value orders (> ₹10,000). | `backend/app/services/gnani.py`<br>`backend/app/services/voice.py`<br>`GET /api/twiml/voice` | Call Console (`/calls`) |
 | **🏆** | **THE BAR (Money, Escalation, Stopping, Audit)** | WebSocket live metrics, merchant Approvals Queue, deterministic Policy Guard, and immutable Timeline audit trail. | `backend/app/agents/pipeline.py`<br>`backend/app/models.py` | All Dashboard Pages |
 
 ---
@@ -143,8 +143,8 @@ RecoverIQ Pro is built as a containerized, event-driven microservices system des
 ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
 │                               EXTERNAL INTEGRATIONS & SERVICES                              │
 │  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌───────────┐  │
-│  │ Razorpay     │   │ Twilio Voice │   │ Twilio SMS / │   │ Resend Email │   │ ElevenLabs│  │
-│  │ Test Mode API│   │ (TwiML Engine│   │ WhatsApp API │   │ Delivery API │   │ TTS Engine│  │
+│  │ Razorpay     │   │ Twilio Voice │   │ Twilio SMS / │   │ Resend Email │   │ Gnani AI  │  │
+│  │ Test Mode API│   │ (TwiML Engine│   │ WhatsApp API │   │ Delivery API │   │ Timbre TTS│  │
 │  └──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘   └───────────┘  │
 └─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -193,7 +193,7 @@ To guarantee safety and prevent AI hallucination, the Recovery Strategist is res
 | **Action B** | `CHECKOUT_RECOVERY` | Generates a Razorpay payment link and dispatches multi-channel outreach via SMS, Email, and WhatsApp. | Abandoned carts, cart drop-offs, expired checkout sessions. |
 | **Action C** | `SUBSCRIPTION_RECOVERY` | Sends a customer portal link for instant card/UPI mandate update along with polite messaging. | Failed recurring auto-pay charges, expired card tokens. |
 | **Action D** | `INVOICE_REMINDER` | Sends B2B overdue invoice reminder with an embedded Promise-to-Pay (P2P) date selection link. | Overdue B2B accounts receivable invoices (Stages 1–3). |
-| **Action E** | `VOICE_RECOVERY` | Initiates an automated AI Voice call via Twilio & ElevenLabs (in Telugu, Hinglish, or English). **Strictly gated for order values > ₹10,000.** | High-value abandoned checkouts or Stage 4+ overdue B2B invoices. |
+| **Action E** | `VOICE_RECOVERY` | Initiates an automated AI Voice call via Twilio & **Gnani Timbre** (in Telugu, Hinglish, Hindi, or English). **Strictly gated for order values > ₹10,000.** | High-value abandoned checkouts or Stage 4+ overdue B2B invoices. |
 | **Action F** | `ESCALATE` | Routes the event to the merchant **Approvals Queue** with full AI diagnostic context for manual review. | AI confidence < 70%, high-risk signals, or high-value threshold breach. |
 | **Action G** | `STOP` | Ceases all recovery attempts immediately. Logs reason as permanent failure. | Opted-out customers, max retry limit reached (3), fraud/dispute codes. |
 
@@ -308,13 +308,15 @@ When B2B clients receive overdue notices, they are provided a link to the self-s
 
 ### 5. Telephony Engine & AI Voice Caller (Telugu / Hinglish / English)
 
-RecoverIQ Pro features a native, self-hosted TwiML telephony server (`backend/app/services/voice.py`) integrated with Twilio Programmable Voice and ElevenLabs Text-to-Speech:
+RecoverIQ Pro features a native, self-hosted TwiML telephony server (`backend/app/services/voice.py`) integrated with Twilio Programmable Voice and **Gnani AI Timbre Text-to-Speech** (`backend/app/services/gnani.py`):
 
-* **Self-Hosted TwiML:** Eliminates external dependencies on third-party XML generators. Twilio fetches voice instructions directly from `/api/twiml/voice`.
+* **Gnani Timbre TTS:** Telugu/Hinglish/Hindi/English speech is synthesised by Gnani's `timbre-v2.5` model (default voices: Suhana for Telugu, Nalini for Hindi, Kaveri for English, Poorvi for Hinglish).
+* **Self-Hosted TwiML:** Twilio fetches instructions from `/api/twiml/voice`, which returns a `<Play>` pointing at the Gnani audio served by `/api/twiml/audio`. If Gnani is not configured, it gracefully falls back to Twilio's `<Say>` voice.
 * **Localized Multilingual Scripts:** Supports fluent Telugu, Hinglish, and English scripts tailored for Indian e-commerce customers.
 * **Link-Safe Scripting:** Voice scripts **never read long payment URLs aloud**. Instead, the AI agent politely informs the customer:
   > *"Namaste Jaswanth gaaru! Direct follow-up call from GreenBasket. Mee monthly subscription payment pending lo undi. Mee WhatsApp mariyu Email ki payment link pampamu. Kindha pampina link click chesi payment complete cheyandi. Dhanyavaadalu!"*
-* **In-Browser Audio Preview:** The Call Console (`/calls`) allows merchants to review call logs and play generated ElevenLabs audio clips directly in the browser.
+* **In-Browser Audio Preview:** The Call Console (`/calls`) allows merchants to review call logs and play the generated Gnani audio clips directly in the browser.
+* **Gnani Prisma STT (bonus):** `POST /api/voice/transcribe` transcribes call recordings with Gnani Prisma and auto-detects Indian languages.
 
 ---
 
@@ -359,8 +361,8 @@ RecoverIQ Pro adheres to strict engineering honesty. We clearly distinguish betw
 | Channel | Service Provider | Real / Simulated Status | Notes & Operational Details |
 |---|---|---|---|
 | 💳 **Payment Links** | Razorpay Test Mode API | 🟢 **100% REAL** | Real payment links generated; webhook confirmations drive actual state transitions. |
-| 📞 **Voice Calls** | Twilio Programmable Voice | 🟢 **100% REAL** | Places actual phone calls to customer numbers using self-hosted TwiML endpoint. |
-| 🗣️ **Voice TTS Audio** | ElevenLabs API | 🟢 **100% REAL** | Renders realistic Telugu/Hinglish voice audio; falls back to Twilio TTS if quota expires. |
+| 📞 **Voice Calls** | Twilio Programmable Voice + Gnani AI | 🟢 **100% REAL** | Places actual phone calls; Twilio fetches our TwiML, which plays Gnani Timbre neural audio. |
+| 🗣️ **Voice TTS Audio** | Gnani AI Timbre API | 🟢 **100% REAL** | Renders realistic Telugu/Hinglish/Hindi/English audio; ElevenLabs is an optional fallback, and Twilio `<Say>` is the last resort if neither is configured. |
 | ✉️ **Email Outreach** | Resend API + Razorpay Notify | 🟢 **100% REAL** | Transmits actual HTML emails to verified customer email addresses. |
 | 💬 **WhatsApp Messages** | Twilio WhatsApp API | 🟢 **100% REAL** | Delivers real WhatsApp messages (requires customer opt-in session on Twilio Sandbox). |
 | 📱 **SMS Outreach** | Twilio SMS API | 🟡 **REAL / SIMULATED** | Real API call made; Indian DLT template restrictions on trial accounts log graceful notice. |
@@ -375,7 +377,7 @@ RecoverIQ Pro is engineered to handle real-world infrastructure failures without
 1. **LLM API Timeout / Quota Exhaustion:** If Claude or Gemini API calls fail, the system seamlessly falls back to the deterministic 50+ error code rule map (`error_codes.py`). The audit log records: `"LLM unavailable — applied rule map fallback"`.
 2. **Low AI Confidence (< 70%):** The strategist agent refuses to execute autonomous actions on low-confidence predictions, routing the event to human merchant review in the Approvals Queue.
 3. **Razorpay Webhook Downtime:** If webhooks are delayed, background arq polling workers periodically sync payment status directly with Razorpay REST APIs.
-4. **Missing Optional Credentials:** If ElevenLabs or Resend API keys are omitted in `.env`, the system gracefully downgrades that specific channel to `SIMULATED` mode while keeping the rest of the application fully operational.
+4. **Missing Optional Credentials:** If the Gnani API key (or the optional Resend key) is omitted in `.env`, the system gracefully downgrades that specific channel to `SIMULATED` mode while keeping the rest of the application fully operational.
 
 ---
 
@@ -391,7 +393,7 @@ RecoverIQ Pro is engineered to handle real-world infrastructure failures without
 | **Approvals Queue** | `/approvals` | Human-in-the-loop escalation panel for high-value (> ₹10,000) or low-confidence (< 70%) recovery actions. |
 | **Recovery Plan** | `/plan` | Policy configuration panel, quiet hours settings, retry backoff calculators, channel priority toggles. |
 | **Timeline** | `/timeline` | Immutable, append-only audit trail per failure event. Click any payment to view its complete execution history. |
-| **Call Console** | `/calls` | Telephony log, call status tracker, ElevenLabs Telugu/Hinglish audio player. |
+| **Call Console** | `/calls` | Telephony log, call status tracker, Gnani Timbre Telugu/Hinglish audio player. |
 | **Recovery Report** | `/report` | Measured recovery analytics, policy violation checks (0%), channel attribution breakdown. |
 | **Settings** | `/settings` | Merchant policy controls, threshold adjustments, API channel connection status monitors. |
 | **GreenBasket Store** | `/store` | Customer-facing storefront with persistent cart, intent-driven abandonment tracker, and Razorpay checkout. |
@@ -445,10 +447,16 @@ Below is a highlight of key API endpoints. Access full interactive OpenAPI Swagg
 * `POST /api/receivables/invoices/{id}/simulate-stage` — Simulate B2B escalation (Stages 1–7).
 * `POST /api/p2p/{id}/submit` — Submit a customer Promise-to-Pay commitment date.
 
-### 4. Approvals & Voice Telephony
+### 4. Approvals & Voice Telephony (Gnani AI + Twilio)
 * `POST /api/approvals/{event_id}/approve` — Approve a gated high-value or low-confidence action.
 * `POST /api/approvals/{event_id}/reject` — Reject a proposed action and mark event `STOPPED`.
-* `GET /api/twiml/voice` — Serve dynamic TwiML XML instructions to Twilio during live calls.
+* `GET /api/twiml/voice` — Serve dynamic TwiML; returns `<Play>` for Gnani Timbre audio or `<Say>` fallback.
+* `GET /api/twiml/audio` — Gnani Timbre TTS audio stream fetched by Twilio during a live call.
+* `GET /api/calls` — List voice calls shown in the Call Console.
+* `GET /api/calls/{id}/audio` — Base64 MP3 for in-browser playback.
+* `POST /api/calls/generate-test` — Generate a Gnani Timbre sample and store it in the Call Console.
+* `POST /api/voice/transcribe` — Transcribe a base64 call recording with Gnani Prisma (STT).
+* `GET /api/system/status` — Shows the live voice provider (`gnani`), TTS model, and STT model.
 
 ---
 
@@ -480,6 +488,21 @@ cd recoveriq-pro
 cp .env.example .env
 ```
 
+### Step 1b: Enable the Gnani AI voice model
+The voice channel uses **Gnani AI** (sponsor model) for Text-to-Speech and Speech-to-Text:
+
+```env
+GNANI_API_KEY=your_gnani_api_key_here
+GNANI_TTS_MODEL=timbre-v2.5
+GNANI_TTS_VOICE=            # blank => auto: te-IN=Suhana, hi-IN=Nalini, en-IN=Kaveri, hi-en=Poorvi
+GNANI_STT_MODEL=prisma-v3.0
+VOICE_PROVIDER=gnani
+```
+
+* Get a key at [app.gnani.ai/voice](https://app.gnani.ai/voice), docs at [docs.gnani.ai](https://docs.gnani.ai).
+* Verify the backend sees it: `GET /api/system/status` → `"voice": {"provider": "gnani", "status": "connected"}`.
+* Without a key, the Call Console still works but every call is labelled `NOT_CONFIGURED`; Twilio falls back to `<Say>` for live calls.
+
 ### Step 2: Launch via Docker Compose
 ```bash
 docker compose up --build
@@ -503,6 +526,10 @@ docker compose up --build
 ### Q1: Why does Twilio Voice say "Could not reach internal server"?
 * **Cause:** Twilio cannot access `localhost:8000` directly over the public internet.
 * **Fix:** Execute `start-ngrok.bat` to generate a public ngrok URL, and set `FRONTEND_URL=https://your-ngrok-subdomain.ngrok-free.app` in `.env`.
+
+### Q1b: Gnani returns `401 INVALID_API_KEY` or `402 Insufficient credit`
+* **Cause:** `GNANI_API_KEY` is missing/invalid, or the key has no TTS scope/credits.
+* **Fix:** Confirm the key starts with the value from [app.gnani.ai/voice](https://app.gnani.ai/voice), restart the backend, and check `GET /api/system/status`. Until then the app degrades to ElevenLabs (if configured) or Twilio `<Say>`.
 
 ### Q2: Why are WhatsApp messages showing as pending on Twilio Trial?
 * **Cause:** Twilio WhatsApp Sandbox requires a 24-hour user-initiated session.

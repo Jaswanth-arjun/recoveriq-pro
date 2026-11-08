@@ -272,7 +272,7 @@ async def execute(db: AsyncSession, event: FailureEvent, decision: Decision) -> 
                 if customer.phone and settings.twilio_ready and not is_shopping_abandonment and amount_inr > 10_000:
                     voice_script = (
                         f"Hello {customer.name}, this is an automated call from GreenBasket Customer Success. "
-                        f"Your payment of {int(amount_inr)} rupees could not be processed due to a "
+                        f"Your payment of {voice_service.rupees_in_words(amount_inr)} could not be processed due to a "
                         f"{category.replace('_', ' ')} issue. "
                         f"We have sent you a secure payment link via SMS and Email. "
                         f"Please check your messages and complete the payment to keep your daily deliveries active. "
@@ -309,7 +309,7 @@ async def execute(db: AsyncSession, event: FailureEvent, decision: Decision) -> 
             script = (
                 f"Hello {customer.name if customer else 'customer'}, this is an automated call "
                 f"from GreenBasket Customer Success. "
-                f"Your payment of {int(amount_inr)} rupees could not be processed. "
+                f"Your payment of {voice_service.rupees_in_words(amount_inr)} could not be processed. "
                 f"We have sent you a secure payment link via SMS and Email. "
                 f"Please check your messages and complete the payment. Thank you."
             )
@@ -317,7 +317,7 @@ async def execute(db: AsyncSession, event: FailureEvent, decision: Decision) -> 
             vc = VoiceCall(failure_event_id=event.id, script=script,
                            language=customer.language if customer else "te",
                            audio_base64=audio["audio_base64"],
-                           simulated=audio.get("engine") == "not_configured")
+                           simulated=audio.get("engine") in ("not_configured", "error"))
             db.add(vc)
             await db.flush()
 
@@ -337,6 +337,8 @@ async def execute(db: AsyncSession, event: FailureEvent, decision: Decision) -> 
             action_record.detail = {
                 "script": script,
                 "engine": audio["engine"],
+                "voice": audio.get("voice", ""),
+                "gnani_language": audio.get("language", ""),
                 "twilio": twilio_call
             }
 

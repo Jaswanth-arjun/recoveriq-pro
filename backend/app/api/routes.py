@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import random
 import time
@@ -24,6 +25,7 @@ from app.agents.pipeline import run_pipeline, mark_recovered, audit
 from app.services import llm as llm_service
 from app.services import razorpay as rzp
 from app.services import voice as voice_service
+from app.services import gnani as gnani_service
 from app.services import messaging
 from app.services.messaging import send_email, send_whatsapp, send_sms
 from app.services.events import connect, disconnect, broadcast
@@ -35,23 +37,66 @@ router = APIRouter()
 # ---------------------------------------------------------------- twiml (fetched by Twilio servers)
 
 
-@router.api_route("/twiml/voice", methods=["GET", "POST"])
-async def twiml_voice(script: str = "", voice: str = "Polly.Aditi"):
+@router.get("/twiml/voice")
+async def twiml_voice(script: str = "", voice: str = "Polly.Aditi", lang: str = "auto"):
     """
-    Public TwiML endpoint. Twilio trial accounts cannot use the inline Twiml
-    parameter, so make_twilio_call passes a public Url pointing here and Twilio
-    GETs it at call time to fetch the script to speak.
+    Public TwiML endpoint fetched by Twilio at call time.
+
+    Primary path: return <Play> pointing at our own Gnani TTS audio endpoint,
+    so the customer hears the Gnani Timbre neural voice (Telugu / Hinglish /
+    Hindi / English). Fallback: Twilio's built-in <Say> voice when Gnani is
+    not configured.
     """
     import re as _re
     from xml.sax.saxutils import escape as _escape
 
-    safe_script = _escape(script[:1200])
-    voice = voice if _re.fullmatch(r"[A-Za-z0-9.\-]{1,40}", voice or "") else "Polly.Aditi"
-    xml = (
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-        f"<Response><Say voice='{voice}'>{safe_script}</Say></Response>"
-    )
+    safe_script = script[:1200]
+    public_base = (settings.frontend_url or settings.backend_url).rstrip("/")
+
+    if settings.voice_provider not in ("elevenlabs", "none") and settings.gnani_ready:
+        # Warm the audio cache before promising Twilio a <Play> URL. If Gnani
+        # fails, fall back to Twilio's <Say> so the call still completes.
+        audio_bytes, _meta = await voice_service.synthesize_audio_bytes(safe_script, lang)
+        if audio_bytes:
+            audio_url = (
+                f"{public_base}/api/twiml/audio"
+                f"?script={quote_plus(safe_script)}"
+                f"&lang={quote_plus(lang or 'auto')}"
+            )
+            xml = (
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                f"<Response><Play>{_escape(audio_url)}</Play></Response>"
+            )
+        else:
+            voice = voice if _re.fullmatch(r"[A-Za-z0-9.\-]{1,40}", voice or "") else "Polly.Aditi"
+            xml = (
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                f"<Response><Say voice='{voice}'>{_escape(safe_script)}</Say></Response>"
+            )
+    else:
+        voice = voice if _re.fullmatch(r"[A-Za-z0-9.\-]{1,40}", voice or "") else "Polly.Aditi"
+        xml = (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            f"<Response><Say voice='{voice}'>{_escape(safe_script)}</Say></Response>"
+        )
     return Response(content=xml, media_type="application/xml")
+
+
+@router.get("/twiml/audio")
+async def twiml_audio(script: str = "", lang: str = "auto"):
+    """
+    Gnani Timbre TTS audio served to Twilio's <Play>. Public by design: Twilio
+    fetches it during a live call. The script is the same one embedded in the
+    TwiML URL, capped at 1200 characters.
+    """
+    audio_bytes, meta = await voice_service.synthesize_audio_bytes(script[:1200], lang)
+    if not audio_bytes:
+        raise HTTPException(503, detail=meta.get("error") or "Voice provider unavailable")
+    return Response(
+        content=audio_bytes,
+        media_type=meta.get("content_type") or "audio/mpeg",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
 
 
 # ---------------------------------------------------------------- setup
@@ -77,7 +122,10 @@ async def health():
         "gemini" if settings.gemini_ready else
         "openrouter" if settings.openrouter_ready else "rule_fallback"
     )
-    channels["voice"] = "elevenlabs" if settings.elevenlabs_ready else "not_configured"
+    channels["voice"] = (
+        "gnani" if settings.gnani_ready else
+        "elevenlabs" if settings.elevenlabs_ready else "not_configured"
+    )
     channels["email"] = "resend" if settings.resend_ready else "not_configured"
     channels["whatsapp"] = "connected" if settings.whatsapp_ready else "not_configured"
     channels["twilio_sms"] = "connected" if settings.twilio_ready else "not_configured"
@@ -636,13 +684,26 @@ async def trigger_subscription_24h_voice_call(sub_id: int, db: AsyncSession = De
     call_res = await voice_service.make_twilio_call(cust.phone, script, language="te")
     voice_res = await voice_service.generate_voice(script, language="te")
 
+    vc = VoiceCall(
+        failure_event_id=None,
+        script=script,
+        language="te",
+        audio_base64=voice_res.get("audio_base64", ""),
+        simulated=voice_res.get("engine") in ("not_configured", "error"),
+    )
+    db.add(vc)
+    await db.flush()
+    await db.commit()
+
     await broadcast("voice.call_triggered", {
         "subscription_id": sub_id,
         "customer": cust.name,
         "phone": cust.phone,
         "script": script,
         "status": "COMPLETED",
-        "call_res": call_res
+        "call_res": call_res,
+        "voice_call_id": vc.id,
+        "engine": voice_res.get("engine"),
     })
 
     return {
@@ -652,7 +713,9 @@ async def trigger_subscription_24h_voice_call(sub_id: int, db: AsyncSession = De
         "phone": cust.phone,
         "script": script,
         "call_result": call_res,
-        "audio_base64": voice_res.get("audio_base64", "")
+        "voice_call_id": vc.id,
+        "engine": voice_res.get("engine"),
+        "audio_base64": voice_res.get("audio_base64", ""),
     }
 
 
@@ -1037,7 +1100,12 @@ async def system_status():
                        "gemini" if settings.gemini_ready else "rule_fallback",
             "status": "connected" if (settings.anthropic_ready or settings.openrouter_ready or settings.gemini_ready) else "rule_fallback",
         },
-        "voice": {"status": "connected" if settings.elevenlabs_ready else "not_configured", "provider": "elevenlabs"},
+        "voice": {
+            "status": "connected" if settings.voice_ready else "not_configured",
+            "provider": "gnani" if settings.gnani_ready else ("elevenlabs" if settings.elevenlabs_ready else "none"),
+            "model": settings.gnani_tts_model if settings.gnani_ready else None,
+            "stt_model": settings.gnani_stt_model if settings.gnani_ready else None,
+        },
         "phone_call": {"status": "connected" if settings.twilio_ready else "not_configured", "provider": "twilio"},
         "email": {"status": "connected" if settings.resend_ready else "not_configured", "provider": "resend"},
         "whatsapp": {
@@ -1410,6 +1478,16 @@ async def list_calls(db: AsyncSession = Depends(get_db)):
              "script": v.script, "language": v.language,
              "simulated": v.simulated, "status": v.status,
              "has_audio": bool(v.audio_base64),
+             "engine": (
+                 ("error" if settings.voice_ready else "not_configured")
+                 if v.simulated else
+                 "gnani" if settings.gnani_ready else
+                 "elevenlabs" if settings.elevenlabs_ready else "tts"
+             ),
+             "provider": (
+                 "gnani" if settings.gnani_ready else
+                 "elevenlabs" if settings.elevenlabs_ready else "none"
+             ),
              "created_at": v.created_at} for v in res.scalars().all()]
 
 
@@ -1419,6 +1497,66 @@ async def call_audio(call_id: int, db: AsyncSession = Depends(get_db)):
     if not vc:
         raise HTTPException(404, "not found")
     return {"audio_base64": vc.audio_base64, "simulated": vc.simulated}
+
+
+class GenerateTestVoiceRequest(BaseModel):
+    text: str = "Hello, this is a test call from RecoverIQ Pro."
+    language: str = "en"
+
+
+@router.post("/calls/generate-test")
+async def generate_test_voice(req: GenerateTestVoiceRequest, db: AsyncSession = Depends(get_db)):
+    """Generate a Gnani Timbre TTS sample and save it to the Call Console."""
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+    res = await voice_service.generate_voice(text[:1200], req.language)
+    vc = VoiceCall(
+        failure_event_id=None,
+        script=text[:1200],
+        language=req.language,
+        audio_base64=res.get("audio_base64", ""),
+        simulated=res.get("engine") in ("not_configured", "error"),
+    )
+    db.add(vc)
+    await db.commit()
+    await db.refresh(vc)
+    return {
+        "ok": True,
+        "id": vc.id,
+        "engine": res.get("engine"),
+        "provider": "gnani" if str(res.get("engine", "")).startswith("gnani") else "fallback",
+        "simulated": vc.simulated,
+        "has_audio": bool(vc.audio_base64),
+        "error": res.get("error"),
+    }
+
+
+class TranscribeRequest(BaseModel):
+    audio_base64: str
+    filename: str = "call.wav"
+    language_code: str = "indic-auto"
+    model: str | None = None
+
+
+@router.post("/voice/transcribe")
+async def voice_transcribe(req: TranscribeRequest):
+    """
+    Transcribe a call recording with Gnani Prisma (STT). Accepts base64 audio
+    so the browser/worker can post it as JSON without multipart handling.
+    """
+    try:
+        raw = base64.b64decode(req.audio_base64)
+    except Exception:
+        raise HTTPException(400, "audio_base64 is not valid base64")
+    if not raw:
+        raise HTTPException(400, "audio is empty")
+    return await gnani_service.transcribe(
+        raw,
+        filename=req.filename,
+        language_code_value=req.language_code,
+        model=req.model,
+    )
 
 
 # ---------------------------------------------------------------- report
@@ -2029,7 +2167,7 @@ Accounts Receivable — RecoverIQ Pro
         inv.last_reminder_at = now
 
         voice_lang = cust.language if cust and cust.language else "te"
-        voice_script = f"Hello {cust_name}, this is an urgent credit recovery call from RecoverIQ Pro. Your B2B Invoice #{inv.invoice_number} for ₹{inv.outstanding_amount:,.2f} is now 8 days overdue. We have sent you the payment link via SMS and Email — please check your messages and process the payment immediately. Thank you."
+        voice_script = f"Hello {cust_name}, this is an urgent credit recovery call from RecoverIQ Pro. Your B2B invoice number {inv.invoice_number} for {voice_service.rupees_in_words(inv.outstanding_amount)} is now 8 days overdue. We have sent you the payment link via SMS and Email — please check your messages and process the payment immediately. Thank you."
 
         v_res = await voice_service.generate_voice(voice_script, voice_lang)
         tw_res = await voice_service.make_twilio_call(cust_phone, voice_script, voice_lang) if cust_phone else {"called": False}
@@ -2039,7 +2177,7 @@ Accounts Receivable — RecoverIQ Pro
             script=voice_script,
             language=voice_lang,
             audio_base64=v_res.get("audio_base64", ""),
-            simulated=v_res.get("engine") == "not_configured"
+            simulated=v_res.get("engine") in ("not_configured", "error")
         )
         db.add(vc)
         await db.flush()

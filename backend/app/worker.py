@@ -65,9 +65,9 @@ async def schedule_voice_call(sub_id: int, delay_hours: int, error_code: str = "
 
 async def fire_scheduled_voice_call(ctx, sub_id: int, error_code: str = "", error_title: str = ""):
     """Executes the scheduled AI voice-caller follow-up — skips if customer already paid."""
-    from app.models import Subscription, Customer
+    from app.models import Subscription, Customer, VoiceCall
     from app.services.events import broadcast
-    from app.services.voice import make_twilio_call
+    from app.services.voice import make_twilio_call, generate_voice
 
     async with SessionLocal() as db:
         sub = await db.get(Subscription, sub_id)
@@ -90,17 +90,29 @@ async def fire_scheduled_voice_call(ctx, sub_id: int, error_code: str = "", erro
             f"This is an automated reminder call. Thank you!"
         )
         call_res = await make_twilio_call(cust.phone, script, language="te")
+        voice_res = await generate_voice(script, "te")
+        vc = VoiceCall(
+            failure_event_id=None,
+            script=script,
+            language="te",
+            audio_base64=voice_res.get("audio_base64", ""),
+            simulated=voice_res.get("engine") in ("not_configured", "error"),
+        )
+        db.add(vc)
+        await db.flush()
         await audit(db, None, "executor", "SCHEDULED_VOICE_CALL_FIRED", {
             "subscription_id": sub_id,
             "customer_name": cust.name,
             "phone": cust.phone,
             "error_code": error_code,
             "call_result": call_res,
+            "voice_call_id": vc.id,
+            "engine": voice_res.get("engine"),
         })
         await db.commit()
         await broadcast("voice.call_triggered", {
             "subscription_id": sub_id, "customer": cust.name, "phone": cust.phone,
-            "scheduled": True, "call_res": call_res,
+            "scheduled": True, "call_res": call_res, "voice_call_id": vc.id,
         })
 
 

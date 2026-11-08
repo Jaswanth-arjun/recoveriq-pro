@@ -15,9 +15,19 @@ class Settings(BaseSettings):
     openrouter_model: str = "liquid/lfm-2.5-2.6b:free"
     llm_unavailable: bool = False
 
-    # Voice & Telephony
+    # Voice & Telephony — Gnani AI is the primary voice model
+    gnani_api_key: str = ""
+    gnani_base_url: str = "https://api.vachana.ai"
+    gnani_tts_model: str = "timbre-v2.5"
+    gnani_tts_voice: str = ""          # optional override; per-language default otherwise
+    gnani_tts_speed: float = 1.0
+    gnani_stt_model: str = "prisma-v3.0"
+    voice_provider: str = "gnani"      # gnani | elevenlabs | none
+
+    # Optional legacy fallback
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = ""
+
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_from_phone: str = ""
@@ -66,8 +76,16 @@ class Settings(BaseSettings):
         return self._is_real(self.openrouter_api_key) and not self.llm_unavailable
 
     @property
+    def gnani_ready(self) -> bool:
+        return self._is_real(self.gnani_api_key, min_len=8)
+
+    @property
     def elevenlabs_ready(self) -> bool:
         return self._is_real(self.elevenlabs_api_key) and self._is_real(self.elevenlabs_voice_id)
+
+    @property
+    def voice_ready(self) -> bool:
+        return self.gnani_ready or self.elevenlabs_ready
 
     @property
     def twilio_ready(self) -> bool:
